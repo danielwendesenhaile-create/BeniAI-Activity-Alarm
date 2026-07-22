@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// The kind of physical activity an alarm requires before it will stop.
-enum ActivityType { squats, pushUps, jumpingJacks, custom }
+enum ActivityType { squats, pushUps, jumpingJacks, neckStretch, custom }
 
 extension ActivityTypeJson on ActivityType {
   String get id => name;
@@ -59,6 +59,17 @@ class ActivityPreset {
       icon: Icons.sports_gymnastics,
       supportsPoseDetection: true,
       defaultTarget: 25,
+    ),
+    ActivityPreset(
+      type: ActivityType.neckStretch,
+      label: 'Neck Stretch',
+      description:
+          'Frame your head and shoulders. Turn your head fully to one side, '
+          'then the other, to count one.',
+      icon: Icons.accessibility,
+      supportsPoseDetection: true,
+      defaultTarget: 10,
+      unitLabel: 'turns',
     ),
     ActivityPreset(
       type: ActivityType.custom,

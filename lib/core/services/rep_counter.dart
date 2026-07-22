@@ -27,6 +27,12 @@ class RepCounter {
   int _pendingStreak = 0;
   DateTime _warmUntil = DateTime.now();
 
+  /// What the tracker last saw and why the frame was accepted or rejected -
+  /// shown as an on-screen readout so tracking issues can be diagnosed from
+  /// a screenshot instead of guessing blind.
+  String _debugInfo = 'no pose yet';
+  String get debugInfo => _debugInfo;
+
   static const _minLikelihood = 0.6;
 
   /// Fraction of all landmarks ML Kit must report with confidence for a
@@ -35,7 +41,8 @@ class RepCounter {
   /// confidently-placed joints) from a partial view - like a hand or leg
   /// held close to the camera - which would otherwise fool the angle check
   /// below into counting a rep. Requiring most of the body to be visible
-  /// filters that out.
+  /// filters that out. Only applies to full-body activities - a neck
+  /// stretch is naturally framed on just the head/shoulders.
   static const _minVisibleFraction = 0.7;
 
   /// How many consecutive qualifying frames a joint must stay past a
@@ -45,6 +52,11 @@ class RepCounter {
   /// strict that real reps get missed when pose detection briefly loses
   /// confidence (occlusion, floor-level camera angle, etc).
   static const _requiredStreak = 2;
+
+  /// How far the nose must swing to one side of the shoulder midpoint,
+  /// as a fraction of shoulder width, to count as "turned" for a neck
+  /// stretch. This is a first-pass estimate, not empirically tuned.
+  static const _neckTurnThreshold = 0.15;
 
   /// Reps completed in this window are ignored while the user is still
   /// getting into frame/position right after tracking starts.
@@ -81,13 +93,18 @@ class RepCounter {
   /// Feeds a newly detected [pose]. Returns true if this frame completed a
   /// new rep.
   bool processPose(Pose pose) {
-    if (!_hasFullBodyInFrame(pose)) return false;
-
     switch (activityType) {
       case ActivityType.squats:
+        if (!_hasFullBodyInFrame(pose)) {
+          _debugInfo = 'rejected: not enough of the body is visible';
+          return false;
+        }
         // Squats need a standing, roughly upright torso - rejects a stray
         // limb or someone lying/sitting from faking knee-angle swings.
-        if (!_hasTorso(pose, wantHorizontal: false)) return false;
+        if (!_hasTorso(pose, wantHorizontal: false)) {
+          _debugInfo = 'rejected: torso is not upright (need standing squat posture)';
+          return false;
+        }
         return _processAngleBased(
           pose,
           shoulderOrHip: PoseLandmarkType.leftHip,
@@ -100,9 +117,16 @@ class RepCounter {
           upThreshold: 160,
         );
       case ActivityType.pushUps:
+        if (!_hasFullBodyInFrame(pose)) {
+          _debugInfo = 'rejected: not enough of the body is visible';
+          return false;
+        }
         // Push-ups need a roughly horizontal (plank) torso - rejects
         // someone standing and just bending an elbow, or a stray limb.
-        if (!_hasTorso(pose, wantHorizontal: true)) return false;
+        if (!_hasTorso(pose, wantHorizontal: true)) {
+          _debugInfo = 'rejected: torso is not horizontal (need plank posture)';
+          return false;
+        }
         return _processAngleBased(
           pose,
           shoulderOrHip: PoseLandmarkType.leftShoulder,
@@ -116,6 +140,8 @@ class RepCounter {
         );
       case ActivityType.jumpingJacks:
         return _processJumpingJack(pose);
+      case ActivityType.neckStretch:
+        return _processNeckStretch(pose);
       case ActivityType.custom:
         // Not pose-countable; verified via OpenAI vision instead.
         return false;
@@ -164,7 +190,10 @@ class RepCounter {
     final a = _bestLandmark(pose, shoulderOrHip, altShoulderOrHip);
     final b = _bestLandmark(pose, joint, altJoint);
     final c = _bestLandmark(pose, end, altEnd);
-    if (a == null || b == null || c == null) return false;
+    if (a == null || b == null || c == null) {
+      _debugInfo = 'rejected: key joints not confidently visible';
+      return false;
+    }
 
     final angle = _angleAt(a, b, c);
 
@@ -175,6 +204,9 @@ class RepCounter {
         : null;
 
     final previous = _confirmPhase(candidate);
+    _debugInfo =
+        'angle=${angle.toStringAsFixed(0)}° phase=${_phase.name} '
+        'reps=$_reps${_isWarmingUp ? ' (warming up)' : ''}';
     if (previous == null) return false;
 
     if (previous == _Phase.down && _phase == _Phase.up && !_isWarmingUp) {
@@ -205,6 +237,7 @@ class RepCounter {
       rightAnkle,
     ];
     if (required.any((l) => l == null || l.likelihood < _minLikelihood)) {
+      _debugInfo = 'rejected: full body not confidently visible';
       return false;
     }
 
@@ -224,9 +257,59 @@ class RepCounter {
         : null;
 
     final previous = _confirmPhase(candidate);
+    _debugInfo =
+        'armsUp=$armsUp legsApart=$legsApart phase=${_phase.name} '
+        'reps=$_reps${_isWarmingUp ? ' (warming up)' : ''}';
     if (previous == null) return false;
 
     if (previous == _Phase.up && _phase == _Phase.down && !_isWarmingUp) {
+      _reps++;
+      return true;
+    }
+    return false;
+  }
+
+  /// A neck stretch turns the head to one side and back. Tracked via the
+  /// nose's horizontal offset from the shoulder midpoint, normalized by
+  /// shoulder width so it works regardless of distance from the camera.
+  /// One full left-then-right (or right-then-left) cycle counts as a rep.
+  bool _processNeckStretch(Pose pose) {
+    final nose = pose.landmarks[PoseLandmarkType.nose];
+    final leftShoulder = pose.landmarks[PoseLandmarkType.leftShoulder];
+    final rightShoulder = pose.landmarks[PoseLandmarkType.rightShoulder];
+
+    if (nose == null ||
+        leftShoulder == null ||
+        rightShoulder == null ||
+        nose.likelihood < _minLikelihood ||
+        leftShoulder.likelihood < _minLikelihood ||
+        rightShoulder.likelihood < _minLikelihood) {
+      _debugInfo = 'rejected: face/shoulders not confidently visible';
+      return false;
+    }
+
+    final shoulderWidth = (leftShoulder.x - rightShoulder.x).abs();
+    if (shoulderWidth < 1) {
+      _debugInfo = 'rejected: shoulders too close together to measure';
+      return false;
+    }
+
+    final midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+    final offset = (nose.x - midShoulderX) / shoulderWidth;
+
+    final candidate = offset <= -_neckTurnThreshold
+        ? _Phase.down
+        : offset >= _neckTurnThreshold
+        ? _Phase.up
+        : null;
+
+    final previous = _confirmPhase(candidate);
+    _debugInfo =
+        'headOffset=${offset.toStringAsFixed(2)} phase=${_phase.name} '
+        'reps=$_reps${_isWarmingUp ? ' (warming up)' : ''}';
+    if (previous == null) return false;
+
+    if (previous == _Phase.down && _phase == _Phase.up && !_isWarmingUp) {
       _reps++;
       return true;
     }

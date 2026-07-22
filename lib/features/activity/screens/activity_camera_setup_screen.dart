@@ -61,6 +61,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     ActivityType.squats: RepCounter(ActivityType.squats),
     ActivityType.pushUps: RepCounter(ActivityType.pushUps),
     ActivityType.jumpingJacks: RepCounter(ActivityType.jumpingJacks),
+    ActivityType.neckStretch: RepCounter(ActivityType.neckStretch),
   };
 
   _Stage _stage = _Stage.idle;
@@ -68,6 +69,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   Timer? _elapsedTimer;
   int _elapsedSeconds = 0;
   int _liveCount = 0;
+  bool _showDebug = false;
   static const _maxRecordSeconds = 15;
 
   ActivityType? _detectedType;
@@ -196,9 +198,12 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       for (final counter in _counters.values) {
         if (counter.processPose(pose)) gotNewRep = true;
       }
-      if (gotNewRep) {
-        final best = _counters.values.map((c) => c.reps).reduce((a, b) => a > b ? a : b);
-        setState(() => _liveCount = best);
+      if (gotNewRep || _showDebug) {
+        setState(() {
+          if (gotNewRep) {
+            _liveCount = _counters.values.map((c) => c.reps).reduce((a, b) => a > b ? a : b);
+          }
+        });
       }
     });
   }
@@ -396,6 +401,14 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       appBar: AppBar(
         title: const Text('Show BeniAI the activity'),
         actions: [
+          IconButton(
+            icon: Icon(
+              Icons.bug_report_outlined,
+              color: _showDebug ? Colors.greenAccent : null,
+            ),
+            tooltip: 'Show tracking details',
+            onPressed: () => setState(() => _showDebug = !_showDebug),
+          ),
           if (_cameras.length > 1 && _stage != _Stage.recording)
             IconButton(
               icon: const Icon(Icons.cameraswitch_outlined),
@@ -432,7 +445,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
           child: Text(
             _stage == _Stage.recording
                 ? 'Recording ${_elapsedSeconds}s - reps detected so far: $_liveCount. '
-                      'Do squats, push-ups or jumping jacks, then tap Stop.'
+                      'Do squats, push-ups, jumping jacks or a neck stretch, then tap Stop.'
                 : _stage == _Stage.analyzing
                 ? 'Analyzing what BeniAI saw...'
                 : 'Tap Start Recording, then perform the activity in view of the camera.',
@@ -457,16 +470,48 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
               if (_stage == _Stage.recording)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      'REC ${_elapsedSeconds}s',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          'REC ${_elapsedSeconds}s',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      if (_showDebug)
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: _counters.entries
+                                .map(
+                                  (e) => Text(
+                                    '${e.key.name}: ${e.value.debugInfo}',
+                                    style: const TextStyle(
+                                      color: Colors.greenAccent,
+                                      fontSize: 11,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
             ],

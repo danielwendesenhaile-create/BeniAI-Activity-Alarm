@@ -53,6 +53,12 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   String _statusMessage = 'Get in frame to begin.';
   int _count = 0;
 
+  /// Off by default so it doesn't clutter normal use - toggle it on to see
+  /// exactly what the tracker is reading (useful to screenshot when
+  /// diagnosing counting issues).
+  bool _showDebug = false;
+  String _debugText = '';
+
   /// The activity's saved reference demo photo, if it has one - passed to
   /// OpenAI vision alongside each live capture so it can compare what the
   /// user's doing now against what they actually demonstrated, instead of
@@ -196,10 +202,17 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     }
 
     _poseService.processCameraImage(image, controller.description).then((pose) {
-      if (!mounted || pose == null || _completed) return;
+      if (!mounted || _completed) return;
+      if (pose == null) {
+        if (_showDebug) setState(() => _debugText = 'no pose detected this frame');
+        return;
+      }
       final gotNewRep = repCounter.processPose(pose);
+      setState(() {
+        if (_showDebug) _debugText = repCounter.debugInfo;
+        if (gotNewRep) _count = repCounter.reps;
+      });
       if (gotNewRep) {
-        setState(() => _count = repCounter.reps);
         ref.read(analyticsServiceProvider).track(AnalyticsEvents.activityRepCounted, {
           'alarm_id': widget.alarmId,
           'count': _count,
@@ -377,11 +390,43 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
                   shadows: [Shadow(blurRadius: 8, color: Colors.black)],
                 ),
               ),
-              if (_cameras.length > 1)
-                IconButton(
-                  onPressed: _switchingCamera ? null : _switchCamera,
-                  icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
-                  tooltip: 'Switch camera',
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (_cameras.length > 1)
+                    IconButton(
+                      onPressed: _switchingCamera ? null : _switchCamera,
+                      icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
+                      tooltip: 'Switch camera',
+                    ),
+                  if (preset.supportsPoseDetection)
+                    IconButton(
+                      onPressed: () => setState(() => _showDebug = !_showDebug),
+                      icon: Icon(
+                        Icons.bug_report_outlined,
+                        color: _showDebug ? Colors.greenAccent : Colors.white,
+                      ),
+                      tooltip: 'Show tracking details',
+                    ),
+                ],
+              ),
+              if (_showDebug && preset.supportsPoseDetection)
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _debugText,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
                 ),
             ],
           ),
