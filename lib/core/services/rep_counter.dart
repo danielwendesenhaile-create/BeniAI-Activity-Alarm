@@ -14,20 +14,57 @@ enum _Phase { up, down, unknown }
 /// limb position) between two thresholds and counts a rep every time the
 /// body completes a down-then-up (or open-then-closed) cycle.
 class RepCounter {
-  RepCounter(this.activityType);
+  RepCounter(this.activityType) {
+    start();
+  }
 
   final ActivityType activityType;
 
   int _reps = 0;
   _Phase _phase = _Phase.unknown;
 
+  _Phase? _pendingPhase;
+  int _pendingStreak = 0;
+  DateTime _warmUntil = DateTime.now();
+
   static const _minLikelihood = 0.5;
+
+  /// How many consecutive qualifying frames a joint must stay past a
+  /// threshold before a phase change is accepted. Filters out single-frame
+  /// pose-estimation jitter and quick incidental movements (e.g. reaching
+  /// for the phone) that would otherwise look like a rep.
+  static const _requiredStreak = 4;
+
+  /// Reps completed in this window are ignored while the user is still
+  /// getting into frame/position right after tracking starts.
+  static const _warmUpDuration = Duration(milliseconds: 1200);
 
   int get reps => _reps;
 
-  void reset() {
+  /// (Re)arms the counter: clears any counted reps and starts a fresh
+  /// warm-up window. Call this right when camera tracking actually begins,
+  /// not just when the counter is constructed, if there's a gap between
+  /// the two (e.g. camera initialization).
+  void start() {
     _reps = 0;
     _phase = _Phase.unknown;
+    _pendingPhase = null;
+    _pendingStreak = 0;
+    _warmUntil = DateTime.now().add(_warmUpDuration);
+  }
+
+  void reset() => start();
+
+  /// Resets phase-tracking and starts a fresh warm-up window without
+  /// clearing the rep count. Call this when frame processing resumes after
+  /// a pause (e.g. after an OpenAI spot-check photo capture) so a few
+  /// seconds of no pose data can't be misread as a phase jump, but progress
+  /// already made isn't lost.
+  void rearm() {
+    _phase = _Phase.unknown;
+    _pendingPhase = null;
+    _pendingStreak = 0;
+    _warmUntil = DateTime.now().add(_warmUpDuration);
   }
 
   /// Feeds a newly detected [pose]. Returns true if this frame completed a
@@ -84,15 +121,18 @@ class RepCounter {
 
     final angle = _angleAt(a, b, c);
 
-    if (angle <= downThreshold) {
-      _phase = _Phase.down;
-    } else if (angle >= upThreshold) {
-      if (_phase == _Phase.down) {
-        _reps++;
-        _phase = _Phase.up;
-        return true;
-      }
-      _phase = _Phase.up;
+    final candidate = angle <= downThreshold
+        ? _Phase.down
+        : angle >= upThreshold
+        ? _Phase.up
+        : null;
+
+    final previous = _confirmPhase(candidate);
+    if (previous == null) return false;
+
+    if (previous == _Phase.down && _phase == _Phase.up && !_isWarmingUp) {
+      _reps++;
+      return true;
     }
     return false;
   }
@@ -130,17 +170,50 @@ class RepCounter {
     final isOpen = armsUp && legsApart;
     final isClosed = !armsUp && !legsApart;
 
-    if (isOpen) {
-      _phase = _Phase.up;
-    } else if (isClosed) {
-      if (_phase == _Phase.up) {
-        _reps++;
-        _phase = _Phase.down;
-        return true;
-      }
-      _phase = _Phase.down;
+    final candidate = isOpen
+        ? _Phase.up
+        : isClosed
+        ? _Phase.down
+        : null;
+
+    final previous = _confirmPhase(candidate);
+    if (previous == null) return false;
+
+    if (previous == _Phase.up && _phase == _Phase.down && !_isWarmingUp) {
+      _reps++;
+      return true;
     }
     return false;
+  }
+
+  bool get _isWarmingUp => DateTime.now().isBefore(_warmUntil);
+
+  /// Advances the debounce state machine toward [candidate]. Returns the
+  /// previous confirmed phase if [candidate] has now been stable for
+  /// [_requiredStreak] consecutive frames and represents an actual change
+  /// (updating [_phase] as a side effect); returns null otherwise (no
+  /// change yet, or the pose was ambiguous between thresholds).
+  _Phase? _confirmPhase(_Phase? candidate) {
+    if (candidate == null || candidate == _phase) {
+      _pendingPhase = null;
+      _pendingStreak = 0;
+      return null;
+    }
+
+    if (_pendingPhase == candidate) {
+      _pendingStreak++;
+    } else {
+      _pendingPhase = candidate;
+      _pendingStreak = 1;
+    }
+
+    if (_pendingStreak < _requiredStreak) return null;
+
+    _pendingPhase = null;
+    _pendingStreak = 0;
+    final previous = _phase;
+    _phase = candidate;
+    return previous;
   }
 
   PoseLandmark? _bestLandmark(Pose pose, PoseLandmarkType type, PoseLandmarkType alt) {

@@ -114,6 +114,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     final controller = _controller;
     if (controller == null || _isStreaming) return;
     _isStreaming = true;
+    _repCounter?.rearm();
     setState(() => _statusMessage = 'Tracking your reps...');
     await controller.startImageStream(_onCameraFrame);
   }

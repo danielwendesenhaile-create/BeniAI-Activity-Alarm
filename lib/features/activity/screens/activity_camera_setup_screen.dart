@@ -1,8 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/service_providers.dart';
+import '../../../core/services/pose_detection_service.dart';
+import '../../../core/services/rep_counter.dart';
 import '../../../core/utils/camera_permission.dart';
 import '../../../models/activity_model.dart';
 
@@ -20,9 +25,13 @@ class ActivitySetupResult {
   });
 }
 
-/// Setup-time flow: "open the camera and show the activity" so BeniAI can
-/// use OpenAI vision to identify it and pre-fill the alarm's activity
-/// fields. The user still confirms/edits the result before saving.
+enum _Stage { idle, recording, analyzing, reviewing }
+
+/// Setup-time flow: the user explicitly starts a short recording, BeniAI
+/// counts reps live on-device (falling back to an OpenAI vision snapshot if
+/// it can't confidently pose-count anything), then the user reviews what
+/// was detected/counted and taps "Set Activity" to confirm - rather than a
+/// single silent photo capture.
 class ActivityCameraSetupScreen extends ConsumerStatefulWidget {
   const ActivityCameraSetupScreen({super.key});
 
@@ -35,8 +44,25 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   List<CameraDescription> _cameras = const [];
   int _cameraIndex = 0;
   bool _initializing = true;
-  bool _analyzing = false;
   String? _error;
+
+  final _poseService = PoseDetectionService();
+  final Map<ActivityType, RepCounter> _counters = {
+    ActivityType.squats: RepCounter(ActivityType.squats),
+    ActivityType.pushUps: RepCounter(ActivityType.pushUps),
+    ActivityType.jumpingJacks: RepCounter(ActivityType.jumpingJacks),
+  };
+
+  _Stage _stage = _Stage.idle;
+  bool _isStreaming = false;
+  Timer? _elapsedTimer;
+  int _elapsedSeconds = 0;
+  static const _maxRecordSeconds = 15;
+
+  ActivityType? _detectedType;
+  String _detectedLabel = '';
+  int _targetReps = 0;
+  String _reviewNote = '';
 
   @override
   void initState() {
@@ -76,26 +102,108 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
 
   Future<void> _startCamera(CameraDescription description) async {
     final previous = _controller;
-    _controller = CameraController(description, ResolutionPreset.medium, enableAudio: false);
+    _controller = CameraController(
+      description,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      // Must match what PoseDetectionService expects per-platform, since
+      // this screen now streams frames for live rep counting too.
+      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+    );
     await _controller!.initialize();
     await previous?.dispose();
     if (mounted) setState(() => _initializing = false);
   }
 
   Future<void> _switchCamera() async {
-    if (_cameras.length < 2) return;
+    if (_cameras.length < 2 || _stage == _Stage.recording) return;
     setState(() => _initializing = true);
     _cameraIndex = (_cameraIndex + 1) % _cameras.length;
     await _startCamera(_cameras[_cameraIndex]);
   }
 
-  Future<void> _captureAndIdentify() async {
+  Future<void> _startRecording() async {
     final controller = _controller;
-    if (controller == null || !controller.value.isInitialized || _analyzing) {
+    if (controller == null || !controller.value.isInitialized || _isStreaming) return;
+
+    for (final counter in _counters.values) {
+      counter.start();
+    }
+
+    setState(() {
+      _stage = _Stage.recording;
+      _elapsedSeconds = 0;
+    });
+
+    _isStreaming = true;
+    await controller.startImageStream(_onCameraFrame);
+
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _elapsedSeconds++);
+      if (_elapsedSeconds >= _maxRecordSeconds) {
+        _stopRecordingAndAnalyze();
+      }
+    });
+  }
+
+  void _onCameraFrame(CameraImage image) {
+    final controller = _controller;
+    if (controller == null || !_isStreaming) return;
+    _poseService.processCameraImage(image, controller.description).then((pose) {
+      if (pose == null || !mounted || !_isStreaming) return;
+      for (final counter in _counters.values) {
+        counter.processPose(pose);
+      }
+    });
+  }
+
+  Future<void> _stopRecordingAndAnalyze() async {
+    if (_stage != _Stage.recording) return;
+    _elapsedTimer?.cancel();
+    _isStreaming = false;
+    final controller = _controller;
+    try {
+      await controller?.stopImageStream();
+    } catch (_) {
+      // Already stopped.
+    }
+
+    setState(() => _stage = _Stage.analyzing);
+
+    // Pick whichever built-in activity racked up the most confirmed reps.
+    ActivityType? bestType;
+    var bestCount = 0;
+    for (final entry in _counters.entries) {
+      if (entry.value.reps > bestCount) {
+        bestType = entry.key;
+        bestCount = entry.value.reps;
+      }
+    }
+
+    // Require at least 2 confirmed reps before trusting the on-device
+    // count, so a single stray transition doesn't get treated as detection.
+    if (bestType != null && bestCount >= 2) {
+      final preset = ActivityPreset.byType(bestType);
+      setState(() {
+        _detectedType = bestType;
+        _detectedLabel = preset.label;
+        _targetReps = preset.defaultTarget;
+        _reviewNote = 'BeniAI counted $bestCount ${preset.unitLabel} while you recorded.';
+        _stage = _Stage.reviewing;
+      });
       return;
     }
 
-    setState(() => _analyzing = true);
+    await _identifyFromStillFrame(controller);
+  }
+
+  Future<void> _identifyFromStillFrame(CameraController? controller) async {
+    if (controller == null) {
+      setState(() => _stage = _Stage.idle);
+      return;
+    }
+
     try {
       final file = await controller.takePicture();
       final bytes = await file.readAsBytes();
@@ -104,33 +212,65 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       if (!mounted) return;
 
       if (result == null) {
+        setState(() => _stage = _Stage.idle);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Couldn't identify the activity. Try again or pick manually."),
+            content: Text(
+              "BeniAI couldn't recognize an activity that time. Try again with fuller, "
+              'clearer movements, or go back and set it up manually.',
+            ),
           ),
         );
         return;
       }
 
-      Navigator.of(context).pop(
-        ActivitySetupResult(
-          activityTypeId: result.type.id,
-          label: result.label,
-          target: result.suggestedTarget,
-        ),
-      );
+      final preset = ActivityPreset.byType(result.type);
+      setState(() {
+        _detectedType = result.type;
+        _detectedLabel = result.label.isNotEmpty ? result.label : preset.label;
+        _targetReps = result.suggestedTarget > 0 ? result.suggestedTarget : preset.defaultTarget;
+        _reviewNote = result.reasoning.isNotEmpty
+            ? result.reasoning
+            : "BeniAI identified this from a photo - it wasn't confident counting reps live.";
+        _stage = _Stage.reviewing;
+      });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Capture failed: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _analyzing = false);
+      if (!mounted) return;
+      setState(() => _stage = _Stage.idle);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not analyze the recording: $e')));
     }
+  }
+
+  void _tryAgain() {
+    for (final counter in _counters.values) {
+      counter.reset();
+    }
+    setState(() {
+      _stage = _Stage.idle;
+      _detectedType = null;
+      _reviewNote = '';
+    });
+  }
+
+  void _adjustTarget(int delta) {
+    setState(() => _targetReps = (_targetReps + delta).clamp(1, 200));
+  }
+
+  void _confirmActivity() {
+    final type = _detectedType;
+    if (type == null) return;
+    Navigator.of(
+      context,
+    ).pop(ActivitySetupResult(activityTypeId: type.id, label: _detectedLabel, target: _targetReps));
   }
 
   @override
   void dispose() {
+    _elapsedTimer?.cancel();
     _controller?.dispose();
+    _poseService.dispose();
     super.dispose();
   }
 
@@ -140,7 +280,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       appBar: AppBar(
         title: const Text('Show BeniAI the activity'),
         actions: [
-          if (_cameras.length > 1)
+          if (_cameras.length > 1 && _stage != _Stage.recording)
             IconButton(
               icon: const Icon(Icons.cameraswitch_outlined),
               onPressed: _initializing ? null : _switchCamera,
@@ -165,47 +305,133 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (_stage == _Stage.reviewing) {
+      return _buildReview();
+    }
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
-            'Frame yourself doing the activity (e.g. mid-squat), then tap capture. '
-            "BeniAI will identify it and suggest a target for your alarm.",
+            _stage == _Stage.recording
+                ? 'Recording - do the activity now (squats, push-ups or jumping jacks all work). '
+                      "Tap Stop once you've done a few reps."
+                : _stage == _Stage.analyzing
+                ? 'Analyzing what BeniAI saw...'
+                : 'Tap Start Recording, then perform the activity in view of the camera.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
         ),
         Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: AspectRatio(
-                aspectRatio: 3 / 4,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: CameraPreview(_controller!),
+          child: Stack(
+            alignment: Alignment.topCenter,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: AspectRatio(
+                  aspectRatio: 3 / 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: CameraPreview(_controller!),
+                  ),
                 ),
               ),
-            ),
+              if (_stage == _Stage.recording)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'REC ${_elapsedSeconds}s',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         Padding(
           padding: const EdgeInsets.all(24),
-          child: ElevatedButton.icon(
-            onPressed: _analyzing ? null : _captureAndIdentify,
-            icon: _analyzing
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.camera_alt_outlined),
-            label: Text(_analyzing ? 'Identifying...' : 'Capture & Set Activity'),
-          ),
+          child: _stage == _Stage.recording
+              ? ElevatedButton.icon(
+                  onPressed: _stopRecordingAndAnalyze,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('Stop & Review'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+                  ),
+                )
+              : ElevatedButton.icon(
+                  onPressed: _stage == _Stage.analyzing ? null : _startRecording,
+                  icon: _stage == _Stage.analyzing
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.fiber_manual_record),
+                  label: Text(_stage == _Stage.analyzing ? 'Analyzing...' : 'Start Recording'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+                  ),
+                ),
         ),
       ],
+    );
+  }
+
+  Widget _buildReview() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.check_circle_outline, size: 56, color: Colors.green),
+          const SizedBox(height: 16),
+          Text(
+            _detectedLabel,
+            style: Theme.of(context).textTheme.headlineSmall,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(_reviewNote, textAlign: TextAlign.center),
+          const SizedBox(height: 28),
+          Text('Target for this alarm', style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                onPressed: () => _adjustTarget(-1),
+                icon: const Icon(Icons.remove_circle_outline),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text('$_targetReps', style: Theme.of(context).textTheme.headlineMedium),
+              ),
+              IconButton(
+                onPressed: () => _adjustTarget(1),
+                icon: const Icon(Icons.add_circle_outline),
+              ),
+            ],
+          ),
+          const SizedBox(height: 32),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              OutlinedButton(onPressed: _tryAgain, child: const Text('Try Again')),
+              const SizedBox(width: 16),
+              ElevatedButton(onPressed: _confirmActivity, child: const Text('Set Activity')),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
