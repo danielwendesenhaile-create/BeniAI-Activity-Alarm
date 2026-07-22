@@ -36,7 +36,7 @@ class AlarmModel {
   /// saved it as a reusable template via the camera. When present, it's
   /// shown to OpenAI vision alongside the live camera feed at ring time so
   /// verification is grounded in what the user actually demonstrated.
-  final String? referenceImageUrl;
+  final String? referenceImageBase64;
 
   final bool isEnabled;
   final DateTime createdAt;
@@ -55,7 +55,7 @@ class AlarmModel {
     required this.activityLabel,
     required this.targetReps,
     required this.verificationMode,
-    this.referenceImageUrl,
+    this.referenceImageBase64,
     required this.isEnabled,
     required this.createdAt,
   });
@@ -109,7 +109,7 @@ class AlarmModel {
     String? activityLabel,
     int? targetReps,
     VerificationMode? verificationMode,
-    String? referenceImageUrl,
+    String? referenceImageBase64,
     bool? isEnabled,
   }) {
     return AlarmModel(
@@ -126,7 +126,7 @@ class AlarmModel {
       activityLabel: activityLabel ?? this.activityLabel,
       targetReps: targetReps ?? this.targetReps,
       verificationMode: verificationMode ?? this.verificationMode,
-      referenceImageUrl: referenceImageUrl ?? this.referenceImageUrl,
+      referenceImageBase64: referenceImageBase64 ?? this.referenceImageBase64,
       isEnabled: isEnabled ?? this.isEnabled,
       createdAt: createdAt,
     );
@@ -146,7 +146,7 @@ class AlarmModel {
       'activityLabel': activityLabel,
       'targetReps': targetReps,
       'verificationMode': verificationMode.id,
-      'referenceImageUrl': referenceImageUrl,
+      'referenceImageBase64': referenceImageBase64,
       'isEnabled': isEnabled,
       'createdAt': Timestamp.fromDate(createdAt),
     };
@@ -167,7 +167,7 @@ class AlarmModel {
       activityLabel: map['activityLabel'] as String? ?? 'Squats',
       targetReps: map['targetReps'] as int? ?? 20,
       verificationMode: VerificationModeJson.fromId(map['verificationMode'] as String?),
-      referenceImageUrl: map['referenceImageUrl'] as String?,
+      referenceImageBase64: map['referenceImageBase64'] as String?,
       isEnabled: map['isEnabled'] as bool? ?? true,
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );

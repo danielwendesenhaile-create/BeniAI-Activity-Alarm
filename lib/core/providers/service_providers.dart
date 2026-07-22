@@ -6,7 +6,6 @@ import '../services/firebase_auth_service.dart';
 import '../services/firestore_repository.dart';
 import '../services/openai_service.dart';
 import '../services/paywall_service.dart';
-import '../services/storage_service.dart';
 
 /// Singleton service instances, wired through Riverpod so screens/providers
 /// can depend on them without a global service locator.
@@ -21,10 +20,6 @@ final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((ref) {
 
 final firestoreRepositoryProvider = Provider<FirestoreRepository>((ref) {
   return FirestoreRepository();
-});
-
-final storageServiceProvider = Provider<StorageService>((ref) {
-  return StorageService();
 });
 
 final openAIServiceProvider = Provider<OpenAIService>((ref) {

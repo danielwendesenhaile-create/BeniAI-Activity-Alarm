@@ -35,7 +35,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
   ActivityType _activityType = ActivityType.squats;
   String _activityLabel = ActivityPreset.byType(ActivityType.squats).label;
   int _targetReps = ActivityPreset.byType(ActivityType.squats).defaultTarget;
-  String? _referenceImageUrl;
+  String? _referenceImageBase64;
 
   bool _isSaving = false;
   bool _loadedExisting = false;
@@ -58,7 +58,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
     _activityType = alarm.activityType;
     _activityLabel = alarm.activityLabel;
     _targetReps = alarm.targetReps;
-    _referenceImageUrl = alarm.referenceImageUrl;
+    _referenceImageBase64 = alarm.referenceImageBase64;
   }
 
   Future<void> _pickTime() async {
@@ -78,7 +78,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
       _activityType = result.preset.type;
       _activityLabel = result.customLabel ?? result.preset.label;
       _targetReps = result.preset.defaultTarget;
-      _referenceImageUrl = null;
+      _referenceImageBase64 = null;
     });
   }
 
@@ -91,7 +91,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
       _activityType = ActivityTypeJson.fromId(result.activityTypeId);
       _activityLabel = result.label;
       _targetReps = result.target;
-      _referenceImageUrl = result.referenceImageUrl;
+      _referenceImageBase64 = result.referenceImageBase64;
     });
   }
 
@@ -102,7 +102,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
       _activityType = template.activityType;
       _activityLabel = template.name;
       _targetReps = template.defaultTarget;
-      _referenceImageUrl = template.referenceImageUrl;
+      _referenceImageBase64 = template.referenceImageBase64;
     });
   }
 
@@ -130,7 +130,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
         activityLabel: _activityLabel,
         targetReps: _targetReps,
         verificationMode: VerificationMode.hybrid,
-        referenceImageUrl: _referenceImageUrl,
+        referenceImageBase64: _referenceImageBase64,
         isEnabled: true,
         createdAt: DateTime.now(),
       );

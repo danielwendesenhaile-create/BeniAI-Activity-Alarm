@@ -107,10 +107,6 @@ class FirestoreRepository {
     return withId;
   }
 
-  Future<void> updateActivityTemplate(ActivityTemplate template) {
-    return _activityTemplatesFor(template.userId).doc(template.id).set(template.toMap());
-  }
-
   Future<void> deleteActivityTemplate({required String uid, required String templateId}) {
     return _activityTemplatesFor(uid).doc(templateId).delete();
   }

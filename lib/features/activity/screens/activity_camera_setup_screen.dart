@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,13 +25,13 @@ class ActivitySetupResult {
   /// Set when the activity was also saved as a reusable template - the
   /// photo the user demonstrated it with, used to ground OpenAI vision
   /// verification at ring time instead of a generic description alone.
-  final String? referenceImageUrl;
+  final String? referenceImageBase64;
 
   const ActivitySetupResult({
     required this.activityTypeId,
     required this.label,
     required this.target,
-    this.referenceImageUrl,
+    this.referenceImageBase64,
   });
 }
 
@@ -313,11 +314,17 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     setState(() => _targetReps = (_targetReps + delta).clamp(1, 200));
   }
 
+  /// Photos larger than this (raw JPEG bytes) aren't stored with the
+  /// template - Firestore caps documents at 1MB, and base64 adds ~33%
+  /// overhead, so this leaves plenty of room for the rest of the fields.
+  static const _maxReferencePhotoBytes = 500 * 1024;
+
   /// Saves the demonstrated activity as a named, reusable template (photo
-  /// included) so it shows up in the manual activity list for any future
-  /// alarm, then hands the result back to the alarm editor. If saving isn't
-  /// possible (signed out, or the reference photo failed to capture), the
-  /// detected activity is still used for this one alarm.
+  /// included, stored inline as base64 - no Cloud Storage, which requires
+  /// Firebase's paid Blaze plan) so it shows up in the manual activity list
+  /// for any future alarm, then hands the result back to the alarm editor.
+  /// If saving isn't possible (signed out), the detected activity is still
+  /// used for this one alarm.
   Future<void> _saveAndConfirm() async {
     final type = _detectedType;
     if (type == null) return;
@@ -326,48 +333,34 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
         ? _detectedLabel
         : _nameController.text.trim();
     final uid = ref.read(currentUidProvider);
-    final photoBytes = _referencePhotoBytes;
 
-    if (uid == null || photoBytes == null) {
+    if (uid == null) {
       Navigator.of(
         context,
       ).pop(ActivitySetupResult(activityTypeId: type.id, label: name, target: _targetReps));
       return;
     }
 
+    final photoBytes = _referencePhotoBytes;
+    final imageBase64 = (photoBytes != null && photoBytes.length <= _maxReferencePhotoBytes)
+        ? base64Encode(photoBytes)
+        : null;
+
     setState(() => _savingTemplate = true);
     try {
       final repo = ref.read(firestoreRepositoryProvider);
-      final storage = ref.read(storageServiceProvider);
 
-      var template = await repo.createActivityTemplate(
+      await repo.createActivityTemplate(
         ActivityTemplate(
           id: '',
           userId: uid,
           name: name,
           activityType: type,
-          referenceImageUrl: '',
+          referenceImageBase64: imageBase64,
           defaultTarget: _targetReps,
           createdAt: DateTime.now(),
         ),
       );
-
-      final imageUrl = await storage.uploadActivityReferenceImage(
-        uid: uid,
-        templateId: template.id,
-        jpegBytes: photoBytes,
-      );
-
-      template = ActivityTemplate(
-        id: template.id,
-        userId: uid,
-        name: name,
-        activityType: type,
-        referenceImageUrl: imageUrl,
-        defaultTarget: _targetReps,
-        createdAt: template.createdAt,
-      );
-      await repo.updateActivityTemplate(template);
 
       if (!mounted) return;
       Navigator.of(context).pop(
@@ -375,7 +368,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
           activityTypeId: type.id,
           label: name,
           target: _targetReps,
-          referenceImageUrl: imageUrl,
+          referenceImageBase64: imageBase64,
         ),
       );
     } catch (e) {
