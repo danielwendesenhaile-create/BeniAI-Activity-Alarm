@@ -27,7 +27,16 @@ class RepCounter {
   int _pendingStreak = 0;
   DateTime _warmUntil = DateTime.now();
 
-  static const _minLikelihood = 0.5;
+  static const _minLikelihood = 0.6;
+
+  /// Fraction of all landmarks ML Kit must report with confidence for a
+  /// frame to be treated as "a full person is actually in view". Pose
+  /// models can hallucinate a plausible-looking skeleton (with a couple of
+  /// confidently-placed joints) from a partial view - like a hand or leg
+  /// held close to the camera - which would otherwise fool the angle check
+  /// below into counting a rep. Requiring most of the body to be visible
+  /// filters that out.
+  static const _minVisibleFraction = 0.7;
 
   /// How many consecutive qualifying frames a joint must stay past a
   /// threshold before a phase change is accepted. Filters out single-frame
@@ -72,8 +81,13 @@ class RepCounter {
   /// Feeds a newly detected [pose]. Returns true if this frame completed a
   /// new rep.
   bool processPose(Pose pose) {
+    if (!_hasFullBodyInFrame(pose)) return false;
+
     switch (activityType) {
       case ActivityType.squats:
+        // Squats need a standing, roughly upright torso - rejects a stray
+        // limb or someone lying/sitting from faking knee-angle swings.
+        if (!_hasTorso(pose, wantHorizontal: false)) return false;
         return _processAngleBased(
           pose,
           shoulderOrHip: PoseLandmarkType.leftHip,
@@ -86,6 +100,9 @@ class RepCounter {
           upThreshold: 160,
         );
       case ActivityType.pushUps:
+        // Push-ups need a roughly horizontal (plank) torso - rejects
+        // someone standing and just bending an elbow, or a stray limb.
+        if (!_hasTorso(pose, wantHorizontal: true)) return false;
         return _processAngleBased(
           pose,
           shoulderOrHip: PoseLandmarkType.leftShoulder,
@@ -103,6 +120,34 @@ class RepCounter {
         // Not pose-countable; verified via OpenAI vision instead.
         return false;
     }
+  }
+
+  /// Rejects frames where only a fragment of the body is visible (e.g. a
+  /// hand or leg held up to the camera), which pose models can otherwise
+  /// render as a plausible-but-hallucinated full skeleton.
+  bool _hasFullBodyInFrame(Pose pose) {
+    if (pose.landmarks.isEmpty) return false;
+    final confident = pose.landmarks.values.where((l) => l.likelihood >= _minLikelihood).length;
+    return confident / pose.landmarks.length >= _minVisibleFraction;
+  }
+
+  /// Checks the shoulder-to-hip line is oriented the way the activity
+  /// expects: mostly horizontal for a push-up plank, mostly vertical for a
+  /// standing squat. Both landmarks must also be confidently visible.
+  bool _hasTorso(Pose pose, {required bool wantHorizontal}) {
+    final shoulder = _bestLandmark(
+      pose,
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+    );
+    final hip = _bestLandmark(pose, PoseLandmarkType.leftHip, PoseLandmarkType.rightHip);
+    if (shoulder == null || hip == null) return false;
+
+    final dx = (shoulder.x - hip.x).abs();
+    final dy = (shoulder.y - hip.y).abs();
+    if (dx == 0 && dy == 0) return false;
+
+    return wantHorizontal ? dx >= dy : dy > dx;
   }
 
   bool _processAngleBased(
