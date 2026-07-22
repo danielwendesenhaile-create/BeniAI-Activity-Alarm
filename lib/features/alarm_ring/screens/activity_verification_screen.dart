@@ -40,6 +40,10 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   final _poseService = PoseDetectionService();
   RepCounter? _repCounter;
 
+  List<CameraDescription> _cameras = const [];
+  int _cameraIndex = 0;
+  bool _switchingCamera = false;
+
   Timer? _spotCheckTimer;
   bool _spotChecking = false;
   bool _isVerifyingCustom = false;
@@ -75,29 +79,17 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     }
 
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) {
         setState(() => _error = 'No camera found on this device.');
         return;
       }
-      var camera = cameras.first;
-      final backCamera = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => camera,
-      );
-      camera = backCamera;
+      _cameraIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+      if (_cameraIndex < 0) _cameraIndex = 0;
 
-      _controller = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
-      );
-      await _controller!.initialize();
+      await _startCamera(_cameras[_cameraIndex]);
 
       _repCounter = RepCounter(alarm.activityType);
-
-      if (mounted) setState(() {});
 
       if (alarm.activityPreset.supportsPoseDetection) {
         await _startTracking();
@@ -108,6 +100,39 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     } catch (e) {
       setState(() => _error = 'Could not start the camera: $e');
     }
+  }
+
+  Future<void> _startCamera(CameraDescription description) async {
+    final previous = _controller;
+    _controller = CameraController(
+      description,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+    );
+    await _controller!.initialize();
+    await previous?.dispose();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2 || _switchingCamera) return;
+    final alarm = ref.read(alarmByIdProvider(widget.alarmId));
+    if (alarm == null) return;
+
+    setState(() => _switchingCamera = true);
+    _spotCheckTimer?.cancel();
+    await _stopTracking();
+
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+    await _startCamera(_cameras[_cameraIndex]);
+
+    if (!mounted) return;
+    if (alarm.activityPreset.supportsPoseDetection) {
+      await _startTracking();
+      _scheduleSpotCheck();
+    }
+    setState(() => _switchingCamera = false);
   }
 
   Future<void> _startTracking() async {
@@ -318,15 +343,25 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
           top: 16,
           left: 16,
           right: 16,
-          child: Text(
-            _statusMessage,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              shadows: [Shadow(blurRadius: 8, color: Colors.black)],
-            ),
+          child: Column(
+            children: [
+              Text(
+                _statusMessage,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  shadows: [Shadow(blurRadius: 8, color: Colors.black)],
+                ),
+              ),
+              if (_cameras.length > 1)
+                IconButton(
+                  onPressed: _switchingCamera ? null : _switchCamera,
+                  icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
+                  tooltip: 'Switch camera',
+                ),
+            ],
           ),
         ),
         Positioned(

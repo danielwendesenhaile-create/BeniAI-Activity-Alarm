@@ -57,6 +57,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   bool _isStreaming = false;
   Timer? _elapsedTimer;
   int _elapsedSeconds = 0;
+  int _liveCount = 0;
   static const _maxRecordSeconds = 15;
 
   ActivityType? _detectedType;
@@ -89,7 +90,10 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
         });
         return;
       }
-      _cameraIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.front);
+      // Default to the back camera: on-device pose detection is only
+      // confirmed reliable on that lens. Front is still selectable via the
+      // switch button for framing convenience.
+      _cameraIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
       if (_cameraIndex < 0) _cameraIndex = 0;
       await _startCamera(_cameras[_cameraIndex]);
     } catch (e) {
@@ -133,6 +137,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     setState(() {
       _stage = _Stage.recording;
       _elapsedSeconds = 0;
+      _liveCount = 0;
     });
 
     _isStreaming = true;
@@ -152,8 +157,13 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     if (controller == null || !_isStreaming) return;
     _poseService.processCameraImage(image, controller.description).then((pose) {
       if (pose == null || !mounted || !_isStreaming) return;
+      var gotNewRep = false;
       for (final counter in _counters.values) {
-        counter.processPose(pose);
+        if (counter.processPose(pose)) gotNewRep = true;
+      }
+      if (gotNewRep) {
+        final best = _counters.values.map((c) => c.reps).reduce((a, b) => a > b ? a : b);
+        setState(() => _liveCount = best);
       }
     });
   }
@@ -210,19 +220,6 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       final result = await ref.read(openAIServiceProvider).identifyActivity(bytes);
 
       if (!mounted) return;
-
-      if (result == null) {
-        setState(() => _stage = _Stage.idle);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "BeniAI couldn't recognize an activity that time. Try again with fuller, "
-              'clearer movements, or go back and set it up manually.',
-            ),
-          ),
-        );
-        return;
-      }
 
       final preset = ActivityPreset.byType(result.type);
       setState(() {
@@ -315,8 +312,8 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
           padding: const EdgeInsets.all(16),
           child: Text(
             _stage == _Stage.recording
-                ? 'Recording - do the activity now (squats, push-ups or jumping jacks all work). '
-                      "Tap Stop once you've done a few reps."
+                ? 'Recording ${_elapsedSeconds}s - reps detected so far: $_liveCount. '
+                      'Do squats, push-ups or jumping jacks, then tap Stop.'
                 : _stage == _Stage.analyzing
                 ? 'Analyzing what BeniAI saw...'
                 : 'Tap Start Recording, then perform the activity in view of the camera.',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -134,9 +135,16 @@ Answer ONLY with compact JSON matching this shape, no prose, no markdown:
   /// and OpenAI vision identifies which built-in activity it best matches
   /// (or classifies it as custom), so the alarm can "set the activity"
   /// automatically instead of requiring a manual pick.
-  Future<ActivityIdentification?> identifyActivity(Uint8List jpegBytes) async {
+  ///
+  /// Throws a [StateError] with a human-readable message on any failure
+  /// (missing key, network error, bad response) instead of failing silently
+  /// - callers should catch it and show `e` to the user so real failures
+  /// are diagnosable instead of looking identical to "didn't recognize it".
+  Future<ActivityIdentification> identifyActivity(Uint8List jpegBytes) async {
     final apiKey = EnvConfig.openAiApiKey;
-    if (apiKey.isEmpty) return null;
+    if (apiKey.isEmpty) {
+      throw StateError("AI setup isn't configured (no OpenAI API key found).");
+    }
 
     final base64Image = base64Encode(jpegBytes);
     const prompt = '''
@@ -182,11 +190,15 @@ Answer ONLY with compact JSON, no prose, no markdown:
           )
           .timeout(const Duration(seconds: 20));
 
-      if (response.statusCode != 200) return null;
+      if (response.statusCode != 200) {
+        throw StateError('OpenAI request failed (HTTP ${response.statusCode}).');
+      }
 
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
       final content = decoded['choices']?[0]?['message']?['content'] as String?;
-      if (content == null) return null;
+      if (content == null) {
+        throw StateError('OpenAI returned an empty response.');
+      }
 
       final parsed = jsonDecode(content) as Map<String, dynamic>;
       return ActivityIdentification(
@@ -195,8 +207,12 @@ Answer ONLY with compact JSON, no prose, no markdown:
         suggestedTarget: (parsed['suggested_target'] as num?)?.toInt() ?? 15,
         reasoning: parsed['reasoning'] as String? ?? '',
       );
+    } on StateError {
+      rethrow;
+    } on TimeoutException {
+      throw StateError('Timed out waiting for OpenAI - check your internet connection.');
     } catch (e) {
-      return null;
+      throw StateError('OpenAI request error: $e');
     }
   }
 
