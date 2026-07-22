@@ -114,7 +114,9 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
       if (alarm.activityPreset.supportsPoseDetection) {
         await _startTracking();
       } else {
-        setState(() => _statusMessage = 'Capture a photo showing you\'ve done it.');
+        setState(
+          () => _statusMessage = 'Do the activity, then tap Verify - once per rep/round.',
+        );
         _referenceImageBytes = _decodeReferenceImage(alarm.referenceImageBase64);
       }
     } catch (e) {
@@ -235,14 +237,23 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
 
       if (!mounted) return;
 
-      if (result.looksComplete) {
-        setState(() => _count = alarm.targetReps);
-        await _completeVerification();
+      // A single photo can never prove the *whole* target was done over
+      // time - so each verified tap counts as one rep instead of waiting
+      // for one photo to somehow show the entire set being finished.
+      if (result.isPerformingActivity) {
+        setState(() => _count++);
+        if (_count >= alarm.targetReps) {
+          await _completeVerification();
+        } else {
+          setState(
+            () => _statusMessage = 'Counted! $_count/${alarm.targetReps} - keep going.',
+          );
+        }
       } else {
         setState(() {
           _statusMessage = result.reasoning.isNotEmpty
               ? result.reasoning
-              : "Doesn't look complete yet - try again.";
+              : "Doesn't look right yet - try again.";
         });
       }
     } catch (e) {
@@ -365,19 +376,43 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
                     target: ref.watch(alarmByIdProvider(widget.alarmId))?.targetReps ?? 1,
                     unitLabel: preset.unitLabel,
                   )
-                : ElevatedButton.icon(
-                    onPressed: _isVerifyingCustom ? null : _captureCustomActivity,
-                    icon: _isVerifyingCustom
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.camera_alt),
-                    label: Text(_isVerifyingCustom ? 'Checking...' : 'Verify with Camera'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
-                    ),
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '$_count / ${ref.watch(alarmByIdProvider(widget.alarmId))?.targetReps ?? 1} ${preset.unitLabel}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _isVerifyingCustom ? null : _captureCustomActivity,
+                        icon: _isVerifyingCustom
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.camera_alt),
+                        label: Text(_isVerifyingCustom ? 'Checking...' : 'Verify with Camera'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+                        ),
+                      ),
+                    ],
                   ),
           ),
         ),
