@@ -32,8 +32,10 @@ class RepCounter {
   /// How many consecutive qualifying frames a joint must stay past a
   /// threshold before a phase change is accepted. Filters out single-frame
   /// pose-estimation jitter and quick incidental movements (e.g. reaching
-  /// for the phone) that would otherwise look like a rep.
-  static const _requiredStreak = 4;
+  /// for the phone) that would otherwise look like a rep, without being so
+  /// strict that real reps get missed when pose detection briefly loses
+  /// confidence (occlusion, floor-level camera angle, etc).
+  static const _requiredStreak = 2;
 
   /// Reps completed in this window are ignored while the user is still
   /// getting into frame/position right after tracking starts.

@@ -105,18 +105,39 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   }
 
   Future<void> _startCamera(CameraDescription description) async {
-    final previous = _controller;
-    _controller = CameraController(
-      description,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      // Must match what PoseDetectionService expects per-platform, since
-      // this screen now streams frames for live rep counting too.
-      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
-    );
-    await _controller!.initialize();
-    await previous?.dispose();
-    if (mounted) setState(() => _initializing = false);
+    // Dispose the old controller before creating the new one - initializing
+    // a second CameraController while the first still holds the hardware
+    // session can silently hang/fail (notably on iOS), which is why
+    // switching cameras looked like it did nothing.
+    await _controller?.dispose();
+    _controller = null;
+
+    try {
+      final controller = CameraController(
+        description,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        // Must match what PoseDetectionService expects per-platform, since
+        // this screen streams frames for live rep counting too.
+        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _initializing = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _initializing = false;
+          _error = 'Could not switch camera: $e';
+        });
+      }
+    }
   }
 
   Future<void> _switchCamera() async {

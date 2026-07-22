@@ -21,9 +21,8 @@ import '../widgets/rep_progress_ring.dart';
 /// the user to perform the activity their alarm was configured with.
 ///
 /// - Pose-countable activities (squats, push-ups, jumping jacks) are
-///   counted live on-device with ML Kit pose detection.
-/// - A periodic OpenAI vision spot-check runs alongside it (hybrid mode) as
-///   a light sanity check.
+///   counted live and continuously on-device with ML Kit pose detection -
+///   nothing pauses the camera stream mid-activity.
 /// - Custom activities (not pose-countable) are verified entirely through
 ///   OpenAI vision: the user captures a photo and BeniAI judges it.
 class ActivityVerificationScreen extends ConsumerStatefulWidget {
@@ -44,8 +43,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   int _cameraIndex = 0;
   bool _switchingCamera = false;
 
-  Timer? _spotCheckTimer;
-  bool _spotChecking = false;
   bool _isVerifyingCustom = false;
   bool _isStreaming = false;
   bool _completed = false;
@@ -97,7 +94,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
 
       if (alarm.activityPreset.supportsPoseDetection) {
         await _startTracking();
-        _scheduleSpotCheck();
       } else {
         setState(() => _statusMessage = 'Capture a photo showing you\'ve done it.');
       }
@@ -107,16 +103,29 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   }
 
   Future<void> _startCamera(CameraDescription description) async {
-    final previous = _controller;
-    _controller = CameraController(
-      description,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
-    );
-    await _controller!.initialize();
-    await previous?.dispose();
-    if (mounted) setState(() {});
+    // Dispose the old controller before creating the new one - initializing
+    // a second CameraController while the first still holds the hardware
+    // session can silently hang/fail (notably on iOS), which is why
+    // switching cameras looked like it did nothing.
+    await _controller?.dispose();
+    _controller = null;
+
+    try {
+      final controller = CameraController(
+        description,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() => _controller = controller);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not switch camera: $e');
+    }
   }
 
   Future<void> _switchCamera() async {
@@ -125,7 +134,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     if (alarm == null) return;
 
     setState(() => _switchingCamera = true);
-    _spotCheckTimer?.cancel();
     await _stopTracking();
 
     _cameraIndex = (_cameraIndex + 1) % _cameras.length;
@@ -134,7 +142,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     if (!mounted) return;
     if (alarm.activityPreset.supportsPoseDetection) {
       await _startTracking();
-      _scheduleSpotCheck();
     }
     setState(() => _switchingCamera = false);
   }
@@ -162,7 +169,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   void _onCameraFrame(CameraImage image) {
     final controller = _controller;
     final repCounter = _repCounter;
-    if (controller == null || repCounter == null || _completed || _spotChecking) {
+    if (controller == null || repCounter == null || _completed) {
       return;
     }
 
@@ -181,46 +188,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
         }
       }
     });
-  }
-
-  void _scheduleSpotCheck() {
-    _spotCheckTimer = Timer.periodic(const Duration(seconds: 18), (_) {
-      _runSpotCheck();
-    });
-  }
-
-  Future<void> _runSpotCheck() async {
-    final alarm = ref.read(alarmByIdProvider(widget.alarmId));
-    final controller = _controller;
-    if (alarm == null || controller == null || _completed || _spotChecking) return;
-
-    setState(() => _spotChecking = true);
-    try {
-      await _stopTracking();
-      final file = await controller.takePicture();
-      final bytes = await file.readAsBytes();
-      final result = await ref
-          .read(openAIServiceProvider)
-          .verifyActivityFrame(
-            jpegBytes: bytes,
-            activityLabel: alarm.activityLabel,
-            targetCount: alarm.targetReps,
-            currentCount: _count,
-          );
-      if (!mounted) return;
-      setState(() {
-        _statusMessage = result.isPerformingActivity
-            ? 'Looking good - keep going!'
-            : "Make sure BeniAI can see you doing it.";
-      });
-    } catch (_) {
-      // Spot-checks are best-effort; ignore failures.
-    } finally {
-      if (mounted) {
-        setState(() => _spotChecking = false);
-      }
-      if (!_completed) await _startTracking();
-    }
   }
 
   Future<void> _captureCustomActivity() async {
@@ -267,7 +234,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   Future<void> _completeVerification() async {
     if (_completed) return;
     _completed = true;
-    _spotCheckTimer?.cancel();
     await _stopTracking();
 
     final alarm = ref.read(alarmByIdProvider(widget.alarmId));
@@ -288,7 +254,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
 
   @override
   void dispose() {
-    _spotCheckTimer?.cancel();
     _controller?.dispose();
     _poseService.dispose();
     super.dispose();
