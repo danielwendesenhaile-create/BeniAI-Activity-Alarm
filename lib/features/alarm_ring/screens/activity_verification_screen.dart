@@ -115,7 +115,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
         await _startTracking();
       } else {
         setState(
-          () => _statusMessage = 'Do the activity, then tap Verify - once per rep/round.',
+          () => _statusMessage = 'Tap Record & Verify while doing the activity - once per rep/round.',
         );
         _referenceImageBytes = _decodeReferenceImage(alarm.referenceImageBase64);
       }
@@ -212,6 +212,26 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     });
   }
 
+  /// How many still frames to capture per verification tap, and how far
+  /// apart. OpenAI's vision API can't accept video, so this is the closest
+  /// approximation: an ordered burst it can reason about as motion instead
+  /// of a single freeze-frame that can never show a repeated activity
+  /// actually happening.
+  static const _burstFrameCount = 4;
+  static const _burstFrameInterval = Duration(milliseconds: 500);
+
+  Future<List<Uint8List>> _captureBurst(CameraController controller) async {
+    final frames = <Uint8List>[];
+    for (var i = 0; i < _burstFrameCount; i++) {
+      final file = await controller.takePicture();
+      frames.add(await file.readAsBytes());
+      if (i < _burstFrameCount - 1) {
+        await Future<void>.delayed(_burstFrameInterval);
+      }
+    }
+    return frames;
+  }
+
   Future<void> _captureCustomActivity() async {
     final alarm = ref.read(alarmByIdProvider(widget.alarmId));
     final controller = _controller;
@@ -219,16 +239,17 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
 
     setState(() {
       _isVerifyingCustom = true;
-      _statusMessage = 'Checking with BeniAI...';
+      _statusMessage = 'Recording - keep doing the activity...';
     });
 
     try {
-      final file = await controller.takePicture();
-      final bytes = await file.readAsBytes();
+      final frames = await _captureBurst(controller);
+      if (mounted) setState(() => _statusMessage = 'Checking with BeniAI...');
+
       final ActivityVisionCheck result = await ref
           .read(openAIServiceProvider)
           .verifyActivityFrame(
-            jpegBytes: bytes,
+            jpegFrames: frames,
             activityLabel: alarm.activityLabel,
             targetCount: alarm.targetReps,
             currentCount: _count,
@@ -406,8 +427,8 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
                                   color: Colors.white,
                                 ),
                               )
-                            : const Icon(Icons.camera_alt),
-                        label: Text(_isVerifyingCustom ? 'Checking...' : 'Verify with Camera'),
+                            : const Icon(Icons.videocam_outlined),
+                        label: Text(_isVerifyingCustom ? 'Working...' : 'Record & Verify'),
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
                         ),

@@ -53,8 +53,13 @@ class OpenAIService {
 
   static const _endpoint = 'https://api.openai.com/v1/chat/completions';
 
+  /// Judges a short burst of ordered camera frames (not a single photo -
+  /// OpenAI's vision API can't see video, but sending several frames
+  /// captured a fraction of a second apart lets it reason about motion
+  /// across the sequence instead of guessing from one freeze-frame, which
+  /// can never show a repeated activity actually happening).
   Future<ActivityVisionCheck> verifyActivityFrame({
-    required Uint8List jpegBytes,
+    required List<Uint8List> jpegFrames,
     required String activityLabel,
     required int targetCount,
     required int currentCount,
@@ -64,44 +69,52 @@ class OpenAIService {
     if (apiKey.isEmpty) {
       return ActivityVisionCheck.fallback('OpenAI API key not configured.');
     }
+    if (jpegFrames.isEmpty) {
+      return ActivityVisionCheck.fallback('No frames captured to check.');
+    }
 
-    final base64Image = base64Encode(jpegBytes);
+    final framesBase64 = jpegFrames.map(base64Encode).toList();
     final referenceBase64 = referenceJpegBytes != null ? base64Encode(referenceJpegBytes) : null;
 
     final prompt = referenceBase64 != null
         ? '''
 You are a strict but encouraging fitness alarm-clock assistant. The FIRST
 image below is a reference photo the user recorded of themselves
-demonstrating "$activityLabel" when they set up this alarm. The SECOND image
-is what the camera sees right now, while the alarm is ringing and they're
-trying to stop it by performing that same activity ($targetCount total
-reps/times, $currentCount counted so far).
+demonstrating "$activityLabel" when they set up this alarm. The remaining
+${framesBase64.length} images are an ORDERED sequence of frames captured
+live just now, roughly half a second apart, while the alarm is ringing and
+they're trying to stop it by performing that same activity ($targetCount
+total reps/times, $currentCount counted so far).
 
 Answer ONLY with compact JSON matching this shape, no prose, no markdown:
 {"is_performing_activity": boolean, "looks_complete": boolean, "reasoning": "short reason"}
 
-- is_performing_activity: true if the second image shows the person doing
-  the same kind of activity/motion as the reference photo (or clearly just
-  finished a rep of it) - compare posture and movement to the reference,
-  not just whether someone is in frame.
+- is_performing_activity: true only if the sequence shows real movement
+  consistent with the activity/motion in the reference photo - compare
+  posture AND how it changes across frames, not just a single frame. A
+  person standing still does not count, even if their pose looks similar
+  to the reference.
 - looks_complete: true only if it's plausible they've now done the full
-  $targetCount, based on visible effort/fatigue cues. Default to false if
-  unsure.
+  $targetCount, based on visible effort/fatigue cues across the sequence.
+  Default to false if unsure.
 '''
         : '''
-You are a strict but encouraging fitness alarm-clock assistant. Look at this
-single camera frame of a user who set an alarm that only stops once they
+You are a strict but encouraging fitness alarm-clock assistant. Below is an
+ORDERED sequence of ${framesBase64.length} camera frames, captured live
+roughly half a second apart, of a user whose alarm only stops once they
 perform: "$activityLabel" ($targetCount total reps/times, $currentCount
 counted so far).
 
 Answer ONLY with compact JSON matching this shape, no prose, no markdown:
 {"is_performing_activity": boolean, "looks_complete": boolean, "reasoning": "short reason"}
 
-- is_performing_activity: true if the person in frame is actively doing that
-  activity right now (or clearly just finished a rep of it).
+- is_performing_activity: true only if the sequence shows real movement
+  consistent with actively performing that activity - compare how the pose
+  changes across frames, not just a single frame. Someone standing still or
+  just posed for the camera does not count.
 - looks_complete: true only if it's plausible they've now done the full
-  $targetCount, based on visible effort/fatigue cues. Default to false if
-  unsure.
+  $targetCount, based on visible effort/fatigue cues across the sequence.
+  Default to false if unsure.
 ''';
 
     final content = <Map<String, dynamic>>[
@@ -111,10 +124,11 @@ Answer ONLY with compact JSON matching this shape, no prose, no markdown:
           'type': 'image_url',
           'image_url': {'url': 'data:image/jpeg;base64,$referenceBase64'},
         },
-      {
-        'type': 'image_url',
-        'image_url': {'url': 'data:image/jpeg;base64,$base64Image'},
-      },
+      for (final frameBase64 in framesBase64)
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/jpeg;base64,$frameBase64'},
+        },
     ];
 
     final body = jsonEncode({
