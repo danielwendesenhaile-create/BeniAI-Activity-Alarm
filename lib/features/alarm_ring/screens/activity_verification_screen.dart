@@ -84,7 +84,11 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
         setState(() => _error = 'No camera found on this device.');
         return;
       }
-      _cameraIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+      // Front camera by default: when the phone is propped up during a
+      // workout, the screen (and its status text / rep count) needs to
+      // face the user, not away from them. A switch button lets them
+      // flip to the back camera if they'd rather prop it facing away.
+      _cameraIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.front);
       if (_cameraIndex < 0) _cameraIndex = 0;
 
       await _startCamera(_cameras[_cameraIndex]);

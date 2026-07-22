@@ -191,9 +191,12 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       }
     }
 
-    // Require at least 2 confirmed reps before trusting the on-device
-    // count, so a single stray transition doesn't get treated as detection.
-    if (bestType != null && bestCount >= 2) {
+    // A single confirmed rep is enough evidence now that RepCounter
+    // debounces noise internally - requiring more just pushed borderline
+    // demos (a person doing one clean push-up) into the weaker
+    // single-photo OpenAI fallback, which then mislabels them "custom" and
+    // leaves the alarm stuck with unreliable per-photo verification.
+    if (bestType != null && bestCount >= 1) {
       final preset = ActivityPreset.byType(bestType);
       setState(() {
         _detectedType = bestType;
