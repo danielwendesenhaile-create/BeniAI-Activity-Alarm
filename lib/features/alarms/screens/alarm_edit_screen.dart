@@ -8,6 +8,7 @@ import '../../../models/activity_model.dart';
 import '../../../models/alarm_model.dart';
 import '../../activity/screens/activity_camera_setup_screen.dart';
 import '../../activity/widgets/activity_picker_sheet.dart';
+import '../../activity/widgets/saved_activity_picker_sheet.dart';
 import '../../auth/providers/auth_providers.dart';
 import '../providers/alarm_providers.dart';
 import '../widgets/sound_picker_sheet.dart';
@@ -34,6 +35,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
   ActivityType _activityType = ActivityType.squats;
   String _activityLabel = ActivityPreset.byType(ActivityType.squats).label;
   int _targetReps = ActivityPreset.byType(ActivityType.squats).defaultTarget;
+  String? _referenceImageUrl;
 
   bool _isSaving = false;
   bool _loadedExisting = false;
@@ -56,6 +58,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
     _activityType = alarm.activityType;
     _activityLabel = alarm.activityLabel;
     _targetReps = alarm.targetReps;
+    _referenceImageUrl = alarm.referenceImageUrl;
   }
 
   Future<void> _pickTime() async {
@@ -75,6 +78,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
       _activityType = result.preset.type;
       _activityLabel = result.customLabel ?? result.preset.label;
       _targetReps = result.preset.defaultTarget;
+      _referenceImageUrl = null;
     });
   }
 
@@ -87,6 +91,18 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
       _activityType = ActivityTypeJson.fromId(result.activityTypeId);
       _activityLabel = result.label;
       _targetReps = result.target;
+      _referenceImageUrl = result.referenceImageUrl;
+    });
+  }
+
+  Future<void> _pickSavedActivity() async {
+    final template = await showSavedActivityPickerSheet(context);
+    if (template == null) return;
+    setState(() {
+      _activityType = template.activityType;
+      _activityLabel = template.name;
+      _targetReps = template.defaultTarget;
+      _referenceImageUrl = template.referenceImageUrl;
     });
   }
 
@@ -114,6 +130,7 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
         activityLabel: _activityLabel,
         targetReps: _targetReps,
         verificationMode: VerificationMode.hybrid,
+        referenceImageUrl: _referenceImageUrl,
         isEnabled: true,
         createdAt: DateTime.now(),
       );
@@ -289,6 +306,15 @@ class _AlarmEditScreenState extends ConsumerState<AlarmEditScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _pickSavedActivity,
+                      icon: const Icon(Icons.bookmark_outline),
+                      label: const Text('Choose a Saved Activity'),
+                    ),
                   ),
                 ],
               ),

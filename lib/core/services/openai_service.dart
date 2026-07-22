@@ -58,6 +58,7 @@ class OpenAIService {
     required String activityLabel,
     required int targetCount,
     required int currentCount,
+    Uint8List? referenceJpegBytes,
   }) async {
     final apiKey = EnvConfig.openAiApiKey;
     if (apiKey.isEmpty) {
@@ -65,8 +66,29 @@ class OpenAIService {
     }
 
     final base64Image = base64Encode(jpegBytes);
-    final prompt =
-        '''
+    final referenceBase64 = referenceJpegBytes != null ? base64Encode(referenceJpegBytes) : null;
+
+    final prompt = referenceBase64 != null
+        ? '''
+You are a strict but encouraging fitness alarm-clock assistant. The FIRST
+image below is a reference photo the user recorded of themselves
+demonstrating "$activityLabel" when they set up this alarm. The SECOND image
+is what the camera sees right now, while the alarm is ringing and they're
+trying to stop it by performing that same activity ($targetCount total
+reps/times, $currentCount counted so far).
+
+Answer ONLY with compact JSON matching this shape, no prose, no markdown:
+{"is_performing_activity": boolean, "looks_complete": boolean, "reasoning": "short reason"}
+
+- is_performing_activity: true if the second image shows the person doing
+  the same kind of activity/motion as the reference photo (or clearly just
+  finished a rep of it) - compare posture and movement to the reference,
+  not just whether someone is in frame.
+- looks_complete: true only if it's plausible they've now done the full
+  $targetCount, based on visible effort/fatigue cues. Default to false if
+  unsure.
+'''
+        : '''
 You are a strict but encouraging fitness alarm-clock assistant. Look at this
 single camera frame of a user who set an alarm that only stops once they
 perform: "$activityLabel" ($targetCount total reps/times, $currentCount
@@ -82,19 +104,23 @@ Answer ONLY with compact JSON matching this shape, no prose, no markdown:
   unsure.
 ''';
 
+    final content = <Map<String, dynamic>>[
+      {'type': 'text', 'text': prompt},
+      if (referenceBase64 != null)
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/jpeg;base64,$referenceBase64'},
+        },
+      {
+        'type': 'image_url',
+        'image_url': {'url': 'data:image/jpeg;base64,$base64Image'},
+      },
+    ];
+
     final body = jsonEncode({
       'model': EnvConfig.openAiModel,
       'messages': [
-        {
-          'role': 'user',
-          'content': [
-            {'type': 'text', 'text': prompt},
-            {
-              'type': 'image_url',
-              'image_url': {'url': 'data:image/jpeg;base64,$base64Image'},
-            },
-          ],
-        },
+        {'role': 'user', 'content': content},
       ],
       'max_tokens': 200,
       'temperature': 0,

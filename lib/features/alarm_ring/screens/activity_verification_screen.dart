@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 
 import '../../../core/providers/service_providers.dart';
 import '../../../core/router/app_router.dart';
@@ -51,6 +53,12 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   String _statusMessage = 'Get in frame to begin.';
   int _count = 0;
 
+  /// The activity's saved reference demo photo, if it has one - fetched
+  /// once and passed to OpenAI vision alongside each live capture so it can
+  /// compare what the user's doing now against what they actually
+  /// demonstrated, instead of judging from a text label alone.
+  Uint8List? _referenceImageBytes;
+
   @override
   void initState() {
     super.initState();
@@ -96,6 +104,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
         await _startTracking();
       } else {
         setState(() => _statusMessage = 'Capture a photo showing you\'ve done it.');
+        _loadReferenceImage(alarm.referenceImageUrl);
       }
     } catch (e) {
       setState(() => _error = 'Could not start the camera: $e');
@@ -190,6 +199,21 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     });
   }
 
+  /// Best-effort fetch of the alarm's saved reference demo photo (if it has
+  /// one) so it can be compared against live captures. Failures are silent
+  /// since the custom-activity flow still works fine without it.
+  Future<void> _loadReferenceImage(String? url) async {
+    if (url == null || url.isEmpty) return;
+    try {
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200 && mounted) {
+        _referenceImageBytes = response.bodyBytes;
+      }
+    } catch (_) {
+      // No reference image available for this session - not fatal.
+    }
+  }
+
   Future<void> _captureCustomActivity() async {
     final alarm = ref.read(alarmByIdProvider(widget.alarmId));
     final controller = _controller;
@@ -210,6 +234,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
             activityLabel: alarm.activityLabel,
             targetCount: alarm.targetReps,
             currentCount: _count,
+            referenceJpegBytes: _referenceImageBytes,
           );
 
       if (!mounted) return;

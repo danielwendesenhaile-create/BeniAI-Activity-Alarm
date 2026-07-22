@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +11,8 @@ import '../../../core/services/pose_detection_service.dart';
 import '../../../core/services/rep_counter.dart';
 import '../../../core/utils/camera_permission.dart';
 import '../../../models/activity_model.dart';
+import '../../../models/activity_template_model.dart';
+import '../../auth/providers/auth_providers.dart';
 
 /// What the user picked/confirmed for the alarm's activity, returned by
 /// popping this screen.
@@ -18,10 +21,16 @@ class ActivitySetupResult {
   final String label;
   final int target;
 
+  /// Set when the activity was also saved as a reusable template - the
+  /// photo the user demonstrated it with, used to ground OpenAI vision
+  /// verification at ring time instead of a generic description alone.
+  final String? referenceImageUrl;
+
   const ActivitySetupResult({
     required this.activityTypeId,
     required this.label,
     required this.target,
+    this.referenceImageUrl,
   });
 }
 
@@ -64,6 +73,10 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   String _detectedLabel = '';
   int _targetReps = 0;
   String _reviewNote = '';
+  Uint8List? _referencePhotoBytes;
+
+  final _nameController = TextEditingController();
+  bool _savingTemplate = false;
 
   @override
   void initState() {
@@ -202,6 +215,20 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
 
     setState(() => _stage = _Stage.analyzing);
 
+    // Capture one reference photo up front - used both as the OpenAI
+    // fallback's input and, if the user saves this as a reusable activity,
+    // as the demo photo BeniAI compares future attempts against.
+    Uint8List? photoBytes;
+    try {
+      if (controller != null) {
+        final file = await controller.takePicture();
+        photoBytes = await file.readAsBytes();
+      }
+    } catch (_) {
+      // Best-effort - detection can still proceed from on-device counting.
+    }
+    _referencePhotoBytes = photoBytes;
+
     // Pick whichever built-in activity racked up the most confirmed reps.
     ActivityType? bestType;
     var bestCount = 0;
@@ -224,23 +251,27 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
         _detectedLabel = preset.label;
         _targetReps = preset.defaultTarget;
         _reviewNote = 'BeniAI counted $bestCount ${preset.unitLabel} while you recorded.';
+        _nameController.text = preset.label;
         _stage = _Stage.reviewing;
       });
       return;
     }
 
-    await _identifyFromStillFrame(controller);
+    await _identifyFromStillFrame(photoBytes);
   }
 
-  Future<void> _identifyFromStillFrame(CameraController? controller) async {
-    if (controller == null) {
+  Future<void> _identifyFromStillFrame(Uint8List? bytes) async {
+    if (bytes == null) {
       setState(() => _stage = _Stage.idle);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Could not capture a photo to analyze.')));
+      }
       return;
     }
 
     try {
-      final file = await controller.takePicture();
-      final bytes = await file.readAsBytes();
       final result = await ref.read(openAIServiceProvider).identifyActivity(bytes);
 
       if (!mounted) return;
@@ -253,6 +284,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
         _reviewNote = result.reasoning.isNotEmpty
             ? result.reasoning
             : "BeniAI identified this from a photo - it wasn't confident counting reps live.";
+        _nameController.text = _detectedLabel;
         _stage = _Stage.reviewing;
       });
     } catch (e) {
@@ -272,6 +304,8 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       _stage = _Stage.idle;
       _detectedType = null;
       _reviewNote = '';
+      _referencePhotoBytes = null;
+      _nameController.clear();
     });
   }
 
@@ -279,12 +313,79 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     setState(() => _targetReps = (_targetReps + delta).clamp(1, 200));
   }
 
-  void _confirmActivity() {
+  /// Saves the demonstrated activity as a named, reusable template (photo
+  /// included) so it shows up in the manual activity list for any future
+  /// alarm, then hands the result back to the alarm editor. If saving isn't
+  /// possible (signed out, or the reference photo failed to capture), the
+  /// detected activity is still used for this one alarm.
+  Future<void> _saveAndConfirm() async {
     final type = _detectedType;
     if (type == null) return;
-    Navigator.of(
-      context,
-    ).pop(ActivitySetupResult(activityTypeId: type.id, label: _detectedLabel, target: _targetReps));
+
+    final name = _nameController.text.trim().isEmpty
+        ? _detectedLabel
+        : _nameController.text.trim();
+    final uid = ref.read(currentUidProvider);
+    final photoBytes = _referencePhotoBytes;
+
+    if (uid == null || photoBytes == null) {
+      Navigator.of(
+        context,
+      ).pop(ActivitySetupResult(activityTypeId: type.id, label: name, target: _targetReps));
+      return;
+    }
+
+    setState(() => _savingTemplate = true);
+    try {
+      final repo = ref.read(firestoreRepositoryProvider);
+      final storage = ref.read(storageServiceProvider);
+
+      var template = await repo.createActivityTemplate(
+        ActivityTemplate(
+          id: '',
+          userId: uid,
+          name: name,
+          activityType: type,
+          referenceImageUrl: '',
+          defaultTarget: _targetReps,
+          createdAt: DateTime.now(),
+        ),
+      );
+
+      final imageUrl = await storage.uploadActivityReferenceImage(
+        uid: uid,
+        templateId: template.id,
+        jpegBytes: photoBytes,
+      );
+
+      template = ActivityTemplate(
+        id: template.id,
+        userId: uid,
+        name: name,
+        activityType: type,
+        referenceImageUrl: imageUrl,
+        defaultTarget: _targetReps,
+        createdAt: template.createdAt,
+      );
+      await repo.updateActivityTemplate(template);
+
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        ActivitySetupResult(
+          activityTypeId: type.id,
+          label: name,
+          target: _targetReps,
+          referenceImageUrl: imageUrl,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _savingTemplate = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not save this activity: $e')));
+      }
+    }
   }
 
   @override
@@ -292,6 +393,7 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     _elapsedTimer?.cancel();
     _controller?.dispose();
     _poseService.dispose();
+    _nameController.dispose();
     super.dispose();
   }
 
@@ -408,10 +510,9 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   }
 
   Widget _buildReview() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Icon(Icons.check_circle_outline, size: 56, color: Colors.green),
           const SizedBox(height: 16),
@@ -442,13 +543,38 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
               ),
             ],
           ),
+          const SizedBox(height: 28),
+          Text(
+            'Save this activity so you can reuse it on any future alarm',
+            style: Theme.of(context).textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _nameController,
+            enabled: !_savingTemplate,
+            textAlign: TextAlign.center,
+            decoration: const InputDecoration(labelText: 'Activity name'),
+          ),
           const SizedBox(height: 32),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              OutlinedButton(onPressed: _tryAgain, child: const Text('Try Again')),
+              OutlinedButton(
+                onPressed: _savingTemplate ? null : _tryAgain,
+                child: const Text('Try Again'),
+              ),
               const SizedBox(width: 16),
-              ElevatedButton(onPressed: _confirmActivity, child: const Text('Set Activity')),
+              ElevatedButton(
+                onPressed: _savingTemplate ? null : _saveAndConfirm,
+                child: _savingTemplate
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Save & Use'),
+              ),
             ],
           ),
         ],

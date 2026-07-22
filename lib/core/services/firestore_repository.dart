@@ -1,13 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../models/activity_template_model.dart';
 import '../../models/alarm_model.dart';
 import '../../models/user_model.dart';
 
-/// Firestore data access for user profiles and alarms.
+/// Firestore data access for user profiles, alarms and saved activities.
 ///
 /// Layout:
-///   users/{uid}                     -> AppUserModel
-///   users/{uid}/alarms/{alarmId}    -> AlarmModel
+///   users/{uid}                              -> AppUserModel
+///   users/{uid}/alarms/{alarmId}              -> AlarmModel
+///   users/{uid}/activityTemplates/{templateId} -> ActivityTemplate
 class FirestoreRepository {
   FirestoreRepository({FirebaseFirestore? firestore})
     : _db = firestore ?? FirebaseFirestore.instance;
@@ -18,6 +20,9 @@ class FirestoreRepository {
 
   CollectionReference<Map<String, dynamic>> _alarmsFor(String uid) =>
       _users.doc(uid).collection('alarms');
+
+  CollectionReference<Map<String, dynamic>> _activityTemplatesFor(String uid) =>
+      _users.doc(uid).collection('activityTemplates');
 
   // ---- Users ----------------------------------------------------------
 
@@ -84,5 +89,29 @@ class FirestoreRepository {
     required bool isEnabled,
   }) {
     return _alarmsFor(uid).doc(alarmId).set({'isEnabled': isEnabled}, SetOptions(merge: true));
+  }
+
+  // ---- Activity templates -----------------------------------------------
+
+  Stream<List<ActivityTemplate>> watchActivityTemplates(String uid) {
+    return _activityTemplatesFor(uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs.map(ActivityTemplate.fromDoc).toList());
+  }
+
+  Future<ActivityTemplate> createActivityTemplate(ActivityTemplate template) async {
+    final doc = _activityTemplatesFor(template.userId).doc();
+    final withId = ActivityTemplate.fromMap(doc.id, template.toMap());
+    await doc.set(withId.toMap());
+    return withId;
+  }
+
+  Future<void> updateActivityTemplate(ActivityTemplate template) {
+    return _activityTemplatesFor(template.userId).doc(template.id).set(template.toMap());
+  }
+
+  Future<void> deleteActivityTemplate({required String uid, required String templateId}) {
+    return _activityTemplatesFor(uid).doc(templateId).delete();
   }
 }

@@ -9,6 +9,10 @@ service cloud.firestore {
       match /alarms/{alarmId} {
         allow read, create, update, delete: if request.auth != null && request.auth.uid == uid;
       }
+
+      match /activityTemplates/{templateId} {
+        allow read, create, update, delete: if request.auth != null && request.auth.uid == uid;
+      }
     }
   }
 }
