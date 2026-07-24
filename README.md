@@ -109,10 +109,19 @@ SUPERWALL_API_KEY_ANDROID=pk_...
 SUPERWALL_PAYWALL_PLACEMENT=campaign_trigger
 ```
 
-`.env` is bundled as a Flutter asset so the app has something to load even
-before you've configured it (all integrations simply no-op until their key
-is present - see `EnvConfig`). **Once you add real secrets, add `.env` to
-`.gitignore`** so you don't commit them.
+`.env` is bundled as a Flutter asset, so it must exist on disk for the app to
+build at all - that's why a blank placeholder is committed rather than
+gitignored (all integrations simply no-op until their key is present - see
+`EnvConfig`). Once you fill in real secrets, protect them from ever being
+committed with:
+
+```bash
+git update-index --skip-worktree .env
+```
+
+This tells git to ignore local changes to that one already-tracked file,
+without needing to remove it from the repo (which would break builds for
+anyone else who clones it). Run it once per machine you work from.
 
 ## 5. Run it
 
