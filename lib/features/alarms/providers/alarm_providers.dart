@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/service_providers.dart';
+import '../../../models/activity_completion_model.dart';
 import '../../../models/activity_template_model.dart';
 import '../../../models/alarm_model.dart';
 import '../../auth/providers/auth_providers.dart';
@@ -17,6 +18,13 @@ final userActivityTemplatesProvider = StreamProvider<List<ActivityTemplate>>((re
   final uid = ref.watch(currentUidProvider);
   if (uid == null) return Stream.value(const <ActivityTemplate>[]);
   return ref.watch(firestoreRepositoryProvider).watchActivityTemplates(uid);
+});
+
+/// Streams the signed-in user's completion history, most recent first.
+final userCompletionsProvider = StreamProvider<List<ActivityCompletion>>((ref) {
+  final uid = ref.watch(currentUidProvider);
+  if (uid == null) return Stream.value(const <ActivityCompletion>[]);
+  return ref.watch(firestoreRepositoryProvider).watchCompletions(uid);
 });
 
 /// Looks up a single alarm by id from the currently loaded list, used by the

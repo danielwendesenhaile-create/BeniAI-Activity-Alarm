@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../models/activity_completion_model.dart';
 import '../../models/activity_template_model.dart';
 import '../../models/alarm_model.dart';
 import '../../models/user_model.dart';
@@ -10,6 +11,7 @@ import '../../models/user_model.dart';
 ///   users/{uid}                              -> AppUserModel
 ///   users/{uid}/alarms/{alarmId}              -> AlarmModel
 ///   users/{uid}/activityTemplates/{templateId} -> ActivityTemplate
+///   users/{uid}/completions/{completionId}    -> ActivityCompletion
 class FirestoreRepository {
   FirestoreRepository({FirebaseFirestore? firestore})
     : _db = firestore ?? FirebaseFirestore.instance;
@@ -23,6 +25,9 @@ class FirestoreRepository {
 
   CollectionReference<Map<String, dynamic>> _activityTemplatesFor(String uid) =>
       _users.doc(uid).collection('activityTemplates');
+
+  CollectionReference<Map<String, dynamic>> _completionsFor(String uid) =>
+      _users.doc(uid).collection('completions');
 
   // ---- Users ----------------------------------------------------------
 
@@ -109,5 +114,21 @@ class FirestoreRepository {
 
   Future<void> deleteActivityTemplate({required String uid, required String templateId}) {
     return _activityTemplatesFor(uid).doc(templateId).delete();
+  }
+
+  // ---- Completions --------------------------------------------------------
+
+  /// Streams the user's completion history, most recent first.
+  Stream<List<ActivityCompletion>> watchCompletions(String uid, {int limit = 100}) {
+    return _completionsFor(uid)
+        .orderBy('completedAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snap) => snap.docs.map(ActivityCompletion.fromDoc).toList());
+  }
+
+  Future<void> createCompletion(ActivityCompletion completion) {
+    final doc = _completionsFor(completion.userId).doc();
+    return doc.set(ActivityCompletion.fromMap(doc.id, completion.toMap()).toMap());
   }
 }

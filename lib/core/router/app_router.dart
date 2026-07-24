@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/alarms/screens/activity_history_screen.dart';
 import '../../features/alarms/screens/alarm_edit_screen.dart';
 import '../../features/alarm_ring/screens/alarm_ring_screen.dart';
 import '../../features/alarm_ring/screens/activity_verification_screen.dart';
@@ -21,6 +22,7 @@ class AppRoutes {
   static String ringAlarm(String id) => '/alarm/$id/ring';
   static String verifyAlarm(String id) => '/alarm/$id/verify';
   static const settings = '/settings';
+  static const history = '/history';
 }
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -47,6 +49,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ActivityVerificationScreen(alarmId: state.pathParameters['id']!),
       ),
       GoRoute(path: AppRoutes.settings, builder: (context, state) => const SettingsScreen()),
+      GoRoute(path: AppRoutes.history, builder: (context, state) => const ActivityHistoryScreen()),
     ],
   );
 });

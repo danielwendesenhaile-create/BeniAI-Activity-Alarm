@@ -65,6 +65,11 @@ class AlarmListScreen extends ConsumerWidget {
         title: const Text('My Alarms'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Activity history',
+            onPressed: () => context.push(AppRoutes.history),
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () => context.push(AppRoutes.settings),
           ),

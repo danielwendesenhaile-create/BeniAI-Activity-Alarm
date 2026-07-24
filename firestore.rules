@@ -13,6 +13,11 @@ service cloud.firestore {
       match /activityTemplates/{templateId} {
         allow read, create, update, delete: if request.auth != null && request.auth.uid == uid;
       }
+
+      match /completions/{completionId} {
+        // Immutable history log - no update, just read/create/delete.
+        allow read, create, delete: if request.auth != null && request.auth.uid == uid;
+      }
     }
   }
 }

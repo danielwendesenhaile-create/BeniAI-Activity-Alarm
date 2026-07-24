@@ -12,6 +12,7 @@ import '../../../core/services/analytics_service.dart';
 import '../../../core/services/pose_detection_service.dart';
 import '../../../core/services/rep_counter.dart';
 import '../../../core/utils/camera_permission.dart';
+import '../../../models/activity_completion_model.dart';
 import '../../../models/activity_model.dart';
 import '../../alarms/providers/alarm_providers.dart';
 import '../widgets/rep_progress_ring.dart';
@@ -197,6 +198,25 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     final alarm = ref.read(alarmByIdProvider(widget.alarmId));
     if (alarm != null) {
       await ref.read(alarmSchedulerServiceProvider).stopById(alarm.nativeAlarmId);
+      try {
+        await ref
+            .read(firestoreRepositoryProvider)
+            .createCompletion(
+              ActivityCompletion(
+                id: '',
+                userId: alarm.userId,
+                alarmId: alarm.id,
+                alarmLabel: alarm.label,
+                activityType: alarm.activityType,
+                activityLabel: alarm.activityLabel,
+                targetReps: alarm.targetReps,
+                completedReps: _count,
+                completedAt: DateTime.now(),
+              ),
+            );
+      } catch (_) {
+        // Best-effort - the alarm has already stopped either way.
+      }
     }
 
     final analytics = ref.read(analyticsServiceProvider);
