@@ -80,9 +80,9 @@ class RepCounter {
 
   /// Resets phase-tracking and starts a fresh warm-up window without
   /// clearing the rep count. Call this when frame processing resumes after
-  /// a pause (e.g. after an OpenAI spot-check photo capture) so a few
-  /// seconds of no pose data can't be misread as a phase jump, but progress
-  /// already made isn't lost.
+  /// a pause (e.g. switching cameras) so a few seconds of no pose data
+  /// can't be misread as a phase jump, but progress already made isn't
+  /// lost.
   void rearm() {
     _phase = _Phase.unknown;
     _pendingPhase = null;
@@ -142,9 +142,6 @@ class RepCounter {
         return _processJumpingJack(pose);
       case ActivityType.neckStretch:
         return _processNeckStretch(pose);
-      case ActivityType.custom:
-        // Not pose-countable; verified via OpenAI vision instead.
-        return false;
     }
   }
 

@@ -4,7 +4,6 @@ import '../services/alarm_scheduler_service.dart';
 import '../services/analytics_service.dart';
 import '../services/firebase_auth_service.dart';
 import '../services/firestore_repository.dart';
-import '../services/openai_service.dart';
 import '../services/paywall_service.dart';
 
 /// Singleton service instances, wired through Riverpod so screens/providers
@@ -20,12 +19,6 @@ final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((ref) {
 
 final firestoreRepositoryProvider = Provider<FirestoreRepository>((ref) {
   return FirestoreRepository();
-});
-
-final openAIServiceProvider = Provider<OpenAIService>((ref) {
-  final service = OpenAIService();
-  ref.onDispose(service.dispose);
-  return service;
 });
 
 final analyticsServiceProvider = Provider<AnalyticsService>((ref) {

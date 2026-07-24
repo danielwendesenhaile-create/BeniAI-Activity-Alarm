@@ -17,8 +17,7 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
-    <!-- Internet access, used by the OpenAI, Firebase, Mixpanel and
-         Superwall SDKs. -->
+    <!-- Internet access, used by the Firebase, Mixpanel and Superwall SDKs. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

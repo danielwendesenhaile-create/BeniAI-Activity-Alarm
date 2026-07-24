@@ -5,10 +5,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 class EnvConfig {
   EnvConfig._();
 
-  static String get openAiApiKey => dotenv.env['OPENAI_API_KEY'] ?? '';
-
-  static String get openAiModel => dotenv.env['OPENAI_VISION_MODEL'] ?? 'gpt-4o-mini';
-
   static String get mixpanelToken => dotenv.env['MIXPANEL_TOKEN'] ?? '';
 
   static String get superwallApiKeyIOS => dotenv.env['SUPERWALL_API_KEY_IOS'] ?? '';
@@ -19,7 +15,5 @@ class EnvConfig {
       dotenv.env['SUPERWALL_PAYWALL_PLACEMENT'] ?? 'campaign_trigger';
 
   static bool get isConfigured =>
-      openAiApiKey.isNotEmpty &&
-      mixpanelToken.isNotEmpty &&
-      (superwallApiKeyIOS.isNotEmpty || superwallApiKeyAndroid.isNotEmpty);
+      mixpanelToken.isNotEmpty && (superwallApiKeyIOS.isNotEmpty || superwallApiKeyAndroid.isNotEmpty);
 }

@@ -4,9 +4,8 @@ import '../../../models/activity_model.dart';
 
 class ActivityPickerResult {
   final ActivityPreset preset;
-  final String? customLabel;
 
-  const ActivityPickerResult({required this.preset, this.customLabel});
+  const ActivityPickerResult({required this.preset});
 }
 
 /// Bottom sheet for manually choosing an [ActivityPreset] (the alternative
@@ -18,27 +17,12 @@ Future<ActivityPickerResult?> showActivityPickerSheet(
   return showModalBottomSheet<ActivityPickerResult>(
     context: context,
     isScrollControlled: true,
-    builder: (context) => _ActivityPickerContent(current: current),
+    builder: (context) => const _ActivityPickerContent(),
   );
 }
 
-class _ActivityPickerContent extends StatefulWidget {
-  const _ActivityPickerContent({this.current});
-
-  final ActivityType? current;
-
-  @override
-  State<_ActivityPickerContent> createState() => _ActivityPickerContentState();
-}
-
-class _ActivityPickerContentState extends State<_ActivityPickerContent> {
-  final _customController = TextEditingController();
-
-  @override
-  void dispose() {
-    _customController.dispose();
-    super.dispose();
-  }
+class _ActivityPickerContent extends StatelessWidget {
+  const _ActivityPickerContent();
 
   @override
   Widget build(BuildContext context) {
@@ -56,39 +40,15 @@ class _ActivityPickerContentState extends State<_ActivityPickerContent> {
           Text('Choose an activity', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
           ...ActivityPreset.all.map((preset) {
-            final isCustom = preset.type == ActivityType.custom;
             return Card(
               child: ListTile(
                 leading: Icon(preset.icon, color: Colors.deepPurpleAccent),
                 title: Text(preset.label),
                 subtitle: Text(preset.description),
-                onTap: isCustom
-                    ? null
-                    : () => Navigator.of(context).pop(ActivityPickerResult(preset: preset)),
+                onTap: () => Navigator.of(context).pop(ActivityPickerResult(preset: preset)),
               ),
             );
           }),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _customController,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              labelText: 'Or describe a custom activity',
-              hintText: 'e.g. "Make your bed"',
-            ),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: _customController.text.trim().isEmpty
-                ? null
-                : () => Navigator.of(context).pop(
-                    ActivityPickerResult(
-                      preset: ActivityPreset.byType(ActivityType.custom),
-                      customLabel: _customController.text.trim(),
-                    ),
-                  ),
-            child: const Text('Use Custom Activity'),
-          ),
         ],
       ),
     );

@@ -25,18 +25,10 @@ class AlarmModel {
 
   final ActivityType activityType;
 
-  /// Free-text description of the activity, used verbatim for
-  /// [ActivityType.custom] and shown in the UI for the rest.
+  /// Display label for the activity, shown in the UI.
   final String activityLabel;
 
   final int targetReps;
-  final VerificationMode verificationMode;
-
-  /// Photo of the user demonstrating this activity, captured when they
-  /// saved it as a reusable template via the camera. When present, it's
-  /// shown to OpenAI vision alongside the live camera feed at ring time so
-  /// verification is grounded in what the user actually demonstrated.
-  final String? referenceImageBase64;
 
   final bool isEnabled;
   final DateTime createdAt;
@@ -54,8 +46,6 @@ class AlarmModel {
     required this.activityType,
     required this.activityLabel,
     required this.targetReps,
-    required this.verificationMode,
-    this.referenceImageBase64,
     required this.isEnabled,
     required this.createdAt,
   });
@@ -108,8 +98,6 @@ class AlarmModel {
     ActivityType? activityType,
     String? activityLabel,
     int? targetReps,
-    VerificationMode? verificationMode,
-    String? referenceImageBase64,
     bool? isEnabled,
   }) {
     return AlarmModel(
@@ -125,8 +113,6 @@ class AlarmModel {
       activityType: activityType ?? this.activityType,
       activityLabel: activityLabel ?? this.activityLabel,
       targetReps: targetReps ?? this.targetReps,
-      verificationMode: verificationMode ?? this.verificationMode,
-      referenceImageBase64: referenceImageBase64 ?? this.referenceImageBase64,
       isEnabled: isEnabled ?? this.isEnabled,
       createdAt: createdAt,
     );
@@ -145,8 +131,6 @@ class AlarmModel {
       'activityType': activityType.id,
       'activityLabel': activityLabel,
       'targetReps': targetReps,
-      'verificationMode': verificationMode.id,
-      'referenceImageBase64': referenceImageBase64,
       'isEnabled': isEnabled,
       'createdAt': Timestamp.fromDate(createdAt),
     };
@@ -166,8 +150,6 @@ class AlarmModel {
       activityType: ActivityTypeJson.fromId(map['activityType'] as String? ?? ''),
       activityLabel: map['activityLabel'] as String? ?? 'Squats',
       targetReps: map['targetReps'] as int? ?? 20,
-      verificationMode: VerificationModeJson.fromId(map['verificationMode'] as String?),
-      referenceImageBase64: map['referenceImageBase64'] as String?,
       isEnabled: map['isEnabled'] as bool? ?? true,
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );

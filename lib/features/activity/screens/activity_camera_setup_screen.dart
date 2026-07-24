@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -22,26 +20,20 @@ class ActivitySetupResult {
   final String label;
   final int target;
 
-  /// Set when the activity was also saved as a reusable template - the
-  /// photo the user demonstrated it with, used to ground OpenAI vision
-  /// verification at ring time instead of a generic description alone.
-  final String? referenceImageBase64;
-
   const ActivitySetupResult({
     required this.activityTypeId,
     required this.label,
     required this.target,
-    this.referenceImageBase64,
   });
 }
 
 enum _Stage { idle, recording, analyzing, reviewing }
 
-/// Setup-time flow: the user explicitly starts a short recording, BeniAI
-/// counts reps live on-device (falling back to an OpenAI vision snapshot if
-/// it can't confidently pose-count anything), then the user reviews what
-/// was detected/counted and taps "Set Activity" to confirm - rather than a
-/// single silent photo capture.
+/// Setup-time flow: the user explicitly starts a short recording, and
+/// BeniAI counts reps live and entirely on-device (Google's MediaPipe-based
+/// pose detector, via ML Kit) across all built-in activities in parallel to
+/// figure out which one is being demonstrated. The user then reviews what
+/// was detected/counted and taps "Save & Use" to confirm.
 class ActivityCameraSetupScreen extends ConsumerStatefulWidget {
   const ActivityCameraSetupScreen({super.key});
 
@@ -76,7 +68,6 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
   String _detectedLabel = '';
   int _targetReps = 0;
   String _reviewNote = '';
-  Uint8List? _referencePhotoBytes;
 
   final _nameController = TextEditingController();
   bool _savingTemplate = false;
@@ -212,30 +203,17 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     if (_stage != _Stage.recording) return;
     _elapsedTimer?.cancel();
     _isStreaming = false;
-    final controller = _controller;
     try {
-      await controller?.stopImageStream();
+      await _controller?.stopImageStream();
     } catch (_) {
       // Already stopped.
     }
 
     setState(() => _stage = _Stage.analyzing);
 
-    // Capture one reference photo up front - used both as the OpenAI
-    // fallback's input and, if the user saves this as a reusable activity,
-    // as the demo photo BeniAI compares future attempts against.
-    Uint8List? photoBytes;
-    try {
-      if (controller != null) {
-        final file = await controller.takePicture();
-        photoBytes = await file.readAsBytes();
-      }
-    } catch (_) {
-      // Best-effort - detection can still proceed from on-device counting.
-    }
-    _referencePhotoBytes = photoBytes;
-
     // Pick whichever built-in activity racked up the most confirmed reps.
+    // A single confirmed rep is enough evidence - RepCounter already
+    // debounces noise internally.
     ActivityType? bestType;
     var bestCount = 0;
     for (final entry in _counters.entries) {
@@ -245,61 +223,30 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       }
     }
 
-    // A single confirmed rep is enough evidence now that RepCounter
-    // debounces noise internally - requiring more just pushed borderline
-    // demos (a person doing one clean push-up) into the weaker
-    // single-photo OpenAI fallback, which then mislabels them "custom" and
-    // leaves the alarm stuck with unreliable per-photo verification.
-    if (bestType != null && bestCount >= 1) {
-      final preset = ActivityPreset.byType(bestType);
-      setState(() {
-        _detectedType = bestType;
-        _detectedLabel = preset.label;
-        _targetReps = preset.defaultTarget;
-        _reviewNote = 'BeniAI counted $bestCount ${preset.unitLabel} while you recorded.';
-        _nameController.text = preset.label;
-        _stage = _Stage.reviewing;
-      });
-      return;
-    }
-
-    await _identifyFromStillFrame(photoBytes);
-  }
-
-  Future<void> _identifyFromStillFrame(Uint8List? bytes) async {
-    if (bytes == null) {
+    if (bestType == null || bestCount < 1) {
       setState(() => _stage = _Stage.idle);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Could not capture a photo to analyze.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "BeniAI couldn't recognize a rep that time. Try again with fuller, clearer "
+              'movements, or pick the activity manually instead.',
+            ),
+          ),
+        );
       }
       return;
     }
 
-    try {
-      final result = await ref.read(openAIServiceProvider).identifyActivity(bytes);
-
-      if (!mounted) return;
-
-      final preset = ActivityPreset.byType(result.type);
-      setState(() {
-        _detectedType = result.type;
-        _detectedLabel = result.label.isNotEmpty ? result.label : preset.label;
-        _targetReps = result.suggestedTarget > 0 ? result.suggestedTarget : preset.defaultTarget;
-        _reviewNote = result.reasoning.isNotEmpty
-            ? result.reasoning
-            : "BeniAI identified this from a photo - it wasn't confident counting reps live.";
-        _nameController.text = _detectedLabel;
-        _stage = _Stage.reviewing;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _stage = _Stage.idle);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not analyze the recording: $e')));
-    }
+    final preset = ActivityPreset.byType(bestType);
+    setState(() {
+      _detectedType = bestType;
+      _detectedLabel = preset.label;
+      _targetReps = preset.defaultTarget;
+      _reviewNote = 'BeniAI counted $bestCount ${preset.unitLabel} while you recorded.';
+      _nameController.text = preset.label;
+      _stage = _Stage.reviewing;
+    });
   }
 
   void _tryAgain() {
@@ -310,7 +257,6 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       _stage = _Stage.idle;
       _detectedType = null;
       _reviewNote = '';
-      _referencePhotoBytes = null;
       _nameController.clear();
     });
   }
@@ -319,17 +265,10 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
     setState(() => _targetReps = (_targetReps + delta).clamp(1, 200));
   }
 
-  /// Photos larger than this (raw JPEG bytes) aren't stored with the
-  /// template - Firestore caps documents at 1MB, and base64 adds ~33%
-  /// overhead, so this leaves plenty of room for the rest of the fields.
-  static const _maxReferencePhotoBytes = 500 * 1024;
-
-  /// Saves the demonstrated activity as a named, reusable template (photo
-  /// included, stored inline as base64 - no Cloud Storage, which requires
-  /// Firebase's paid Blaze plan) so it shows up in the manual activity list
-  /// for any future alarm, then hands the result back to the alarm editor.
-  /// If saving isn't possible (signed out), the detected activity is still
-  /// used for this one alarm.
+  /// Saves the demonstrated activity as a named, reusable template so it
+  /// shows up in the manual activity list for any future alarm, then hands
+  /// the result back to the alarm editor. If saving isn't possible (signed
+  /// out), the detected activity is still used for this one alarm.
   Future<void> _saveAndConfirm() async {
     final type = _detectedType;
     if (type == null) return;
@@ -346,11 +285,6 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
       return;
     }
 
-    final photoBytes = _referencePhotoBytes;
-    final imageBase64 = (photoBytes != null && photoBytes.length <= _maxReferencePhotoBytes)
-        ? base64Encode(photoBytes)
-        : null;
-
     setState(() => _savingTemplate = true);
     try {
       final repo = ref.read(firestoreRepositoryProvider);
@@ -361,21 +295,15 @@ class _ActivityCameraSetupScreenState extends ConsumerState<ActivityCameraSetupS
           userId: uid,
           name: name,
           activityType: type,
-          referenceImageBase64: imageBase64,
           defaultTarget: _targetReps,
           createdAt: DateTime.now(),
         ),
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop(
-        ActivitySetupResult(
-          activityTypeId: type.id,
-          label: name,
-          target: _targetReps,
-          referenceImageBase64: imageBase64,
-        ),
-      );
+      Navigator.of(
+        context,
+      ).pop(ActivitySetupResult(activityTypeId: type.id, label: name, target: _targetReps));
     } catch (e) {
       if (mounted) {
         setState(() => _savingTemplate = false);

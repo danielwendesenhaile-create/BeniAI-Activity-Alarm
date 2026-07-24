@@ -1,24 +1,24 @@
 # BeniAI Activity Alarm
 
 An alarm clock that only stops once you've actually done the activity you set
-for it - squats, push-ups, jumping jacks, or anything else - verified live
+for it - squats, push-ups, jumping jacks, or a neck stretch - verified live
 through your camera.
 
 Built with Flutter. Firebase for auth/database, Superwall for the paywall,
-OpenAI for camera-based activity verification, and Mixpanel for analytics.
+and Mixpanel for analytics. Activity verification is entirely on-device -
+no cloud AI vision calls, no per-check cost or latency.
 
 ## How it works
 
 1. **Set an alarm** - time, repeat days, alarm sound, and an activity target
-   (e.g. "20 squats"). You can pick the activity manually, or open the camera
-   and demonstrate it - OpenAI vision identifies it and pre-fills the alarm.
+   (e.g. "20 squats"). Pick the activity manually, or open the camera and
+   demonstrate it - on-device pose detection identifies which built-in
+   activity it matches and pre-fills the alarm. You can also save a
+   demonstrated activity by name to reuse on future alarms.
 2. **Alarm rings** - a full-screen ringing view that can't be swiped away.
-3. **Camera verification** - tapping "I'm up" opens the camera:
-   - Squats / push-ups / jumping jacks are counted live, on-device, with
-     Google ML Kit pose detection (fast, free, works offline).
-   - A periodic OpenAI vision spot-check runs alongside it as a sanity check.
-   - Custom activities (anything pose detection can't count) are verified
-     entirely by OpenAI vision from a captured photo.
+3. **Camera verification** - tapping "I'm up" opens the camera: reps are
+   counted live, continuously, and entirely on-device with Google's
+   MediaPipe-based pose detector (via ML Kit) - fast, free, works offline.
 4. Once the target is hit, the alarm stops.
 
 ## Project structure
@@ -29,7 +29,7 @@ lib/
     config/       env vars, built-in alarm sounds
     providers/    Riverpod wiring for all services
     router/       go_router routes
-    services/     Firebase, OpenAI, Mixpanel, Superwall, alarm scheduling,
+    services/     Firebase, Mixpanel, Superwall, alarm scheduling,
                    pose detection + rep counting
     theme/
   features/
@@ -46,8 +46,7 @@ lib/
 
 - Flutter 3.44+ (`flutter --version`)
 - Accounts with: [Firebase](https://console.firebase.google.com),
-  [Superwall](https://superwall.com), [OpenAI](https://platform.openai.com),
-  [Mixpanel](https://mixpanel.com)
+  [Superwall](https://superwall.com), [Mixpanel](https://mixpanel.com)
 - For iOS: Xcode + CocoaPods, on macOS
 - For Android: Android Studio / SDK
 
@@ -85,15 +84,7 @@ Then, in the Firebase console:
    limit or opens "Manage subscription" in Settings - Superwall decides
    whether to show a paywall based on your dashboard campaign config.
 
-## 3. OpenAI setup
-
-Create an API key at <https://platform.openai.com/api-keys>. The app uses a
-vision-capable chat model (default `gpt-4o-mini`) for:
-- Identifying an activity demonstrated on camera during alarm setup.
-- Verifying custom (non-pose-countable) activities.
-- Periodic spot-checks alongside on-device pose detection.
-
-## 4. Mixpanel setup
+## 3. Mixpanel setup
 
 Create a project at <https://mixpanel.com>, copy its **Project Token** (not
 the secret key). Events tracked: `sign_up`, `sign_in`, `sign_out`,
@@ -103,7 +94,7 @@ the secret key). Events tracked: `sign_up`, `sign_in`, `sign_out`,
 `lib/core/services/analytics_service.dart` (`AnalyticsEvents`) for the full
 list.
 
-## 5. Configure secrets
+## 4. Configure secrets
 
 ```bash
 cp .env.example .env
@@ -112,8 +103,6 @@ cp .env.example .env
 Fill in `.env` with your real keys:
 
 ```
-OPENAI_API_KEY=sk-...
-OPENAI_VISION_MODEL=gpt-4o-mini
 MIXPANEL_TOKEN=...
 SUPERWALL_API_KEY_IOS=pk_...
 SUPERWALL_API_KEY_ANDROID=pk_...
@@ -125,7 +114,7 @@ before you've configured it (all integrations simply no-op until their key
 is present - see `EnvConfig`). **Once you add real secrets, add `.env` to
 `.gitignore`** so you don't commit them.
 
-## 6. Run it
+## 5. Run it
 
 ```bash
 flutter pub get
@@ -148,10 +137,13 @@ names, or update `lib/core/config/alarm_sounds.dart`) before shipping.
   the `alarm` package works around this with a silent background audio
   session, but truly reliable wake-ups on iOS depend on the OS more than on
   Android. Test thoroughly on real devices before shipping.
-- **Rep counting** uses simple joint-angle thresholds (see
-  `lib/core/services/rep_counter.dart`), not a trained ML rep-counting
-  model. It works well for clear, full-body-in-frame reps but can be fooled
-  by partial reps or bad framing - that's what the OpenAI spot-check is for.
+- **Rep counting** uses simple joint-angle/position thresholds on top of
+  MediaPipe pose landmarks (see `lib/core/services/rep_counter.dart`), not a
+  trained action-recognition model. It works well for clear, properly-framed
+  reps but, being purely geometric, has no real understanding of *which*
+  activity is happening - only built-in activities with hand-coded rules are
+  supported (squats, push-ups, jumping jacks, neck stretch). Adding another
+  trackable activity means writing a new rule in `RepCounter`.
 - **Firestore rules**: the provided `firestore.rules` are a reasonable
   starting point (users can only read/write their own data) but review them
   against your own threat model before going to production.

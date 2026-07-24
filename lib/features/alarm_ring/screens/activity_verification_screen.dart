@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +9,6 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/analytics_service.dart';
-import '../../../core/services/openai_service.dart';
 import '../../../core/services/pose_detection_service.dart';
 import '../../../core/services/rep_counter.dart';
 import '../../../core/utils/camera_permission.dart';
@@ -20,13 +17,10 @@ import '../../alarms/providers/alarm_providers.dart';
 import '../widgets/rep_progress_ring.dart';
 
 /// The screen that actually stops the alarm: opens the camera and requires
-/// the user to perform the activity their alarm was configured with.
-///
-/// - Pose-countable activities (squats, push-ups, jumping jacks) are
-///   counted live and continuously on-device with ML Kit pose detection -
-///   nothing pauses the camera stream mid-activity.
-/// - Custom activities (not pose-countable) are verified entirely through
-///   OpenAI vision: the user captures a photo and BeniAI judges it.
+/// the user to perform the activity their alarm was configured with,
+/// counted live, continuously, and entirely on-device via Google's
+/// MediaPipe-based pose detector (through ML Kit) - nothing pauses the
+/// camera stream mid-activity, and no cloud AI call is ever made here.
 class ActivityVerificationScreen extends ConsumerStatefulWidget {
   const ActivityVerificationScreen({super.key, required this.alarmId});
 
@@ -45,7 +39,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   int _cameraIndex = 0;
   bool _switchingCamera = false;
 
-  bool _isVerifyingCustom = false;
   bool _isStreaming = false;
   bool _completed = false;
 
@@ -58,23 +51,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
   /// diagnosing counting issues).
   bool _showDebug = false;
   String _debugText = '';
-
-  /// The activity's saved reference demo photo, if it has one - passed to
-  /// OpenAI vision alongside each live capture so it can compare what the
-  /// user's doing now against what they actually demonstrated, instead of
-  /// judging from a text label alone.
-  Uint8List? _referenceImageBytes;
-
-  /// Best-effort decode of the alarm's saved reference demo photo. Never
-  /// throws - the custom-activity flow still works fine without it.
-  Uint8List? _decodeReferenceImage(String? base64Image) {
-    if (base64Image == null || base64Image.isEmpty) return null;
-    try {
-      return base64Decode(base64Image);
-    } catch (_) {
-      return null;
-    }
-  }
 
   @override
   void initState() {
@@ -116,15 +92,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
       await _startCamera(_cameras[_cameraIndex]);
 
       _repCounter = RepCounter(alarm.activityType);
-
-      if (alarm.activityPreset.supportsPoseDetection) {
-        await _startTracking();
-      } else {
-        setState(
-          () => _statusMessage = 'Tap Record & Verify while doing the activity - once per rep/round.',
-        );
-        _referenceImageBytes = _decodeReferenceImage(alarm.referenceImageBase64);
-      }
+      await _startTracking();
     } catch (e) {
       setState(() => _error = 'Could not start the camera: $e');
     }
@@ -158,8 +126,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
 
   Future<void> _switchCamera() async {
     if (_cameras.length < 2 || _switchingCamera) return;
-    final alarm = ref.read(alarmByIdProvider(widget.alarmId));
-    if (alarm == null) return;
 
     setState(() => _switchingCamera = true);
     await _stopTracking();
@@ -168,9 +134,7 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
     await _startCamera(_cameras[_cameraIndex]);
 
     if (!mounted) return;
-    if (alarm.activityPreset.supportsPoseDetection) {
-      await _startTracking();
-    }
+    await _startTracking();
     setState(() => _switchingCamera = false);
   }
 
@@ -223,78 +187,6 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
         }
       }
     });
-  }
-
-  /// How many still frames to capture per verification tap, and how far
-  /// apart. OpenAI's vision API can't accept video, so this is the closest
-  /// approximation: an ordered burst it can reason about as motion instead
-  /// of a single freeze-frame that can never show a repeated activity
-  /// actually happening.
-  static const _burstFrameCount = 4;
-  static const _burstFrameInterval = Duration(milliseconds: 500);
-
-  Future<List<Uint8List>> _captureBurst(CameraController controller) async {
-    final frames = <Uint8List>[];
-    for (var i = 0; i < _burstFrameCount; i++) {
-      final file = await controller.takePicture();
-      frames.add(await file.readAsBytes());
-      if (i < _burstFrameCount - 1) {
-        await Future<void>.delayed(_burstFrameInterval);
-      }
-    }
-    return frames;
-  }
-
-  Future<void> _captureCustomActivity() async {
-    final alarm = ref.read(alarmByIdProvider(widget.alarmId));
-    final controller = _controller;
-    if (alarm == null || controller == null || _isVerifyingCustom) return;
-
-    setState(() {
-      _isVerifyingCustom = true;
-      _statusMessage = 'Recording - keep doing the activity...';
-    });
-
-    try {
-      final frames = await _captureBurst(controller);
-      if (mounted) setState(() => _statusMessage = 'Checking with BeniAI...');
-
-      final ActivityVisionCheck result = await ref
-          .read(openAIServiceProvider)
-          .verifyActivityFrame(
-            jpegFrames: frames,
-            activityLabel: alarm.activityLabel,
-            targetCount: alarm.targetReps,
-            currentCount: _count,
-            referenceJpegBytes: _referenceImageBytes,
-          );
-
-      if (!mounted) return;
-
-      // A single photo can never prove the *whole* target was done over
-      // time - so each verified tap counts as one rep instead of waiting
-      // for one photo to somehow show the entire set being finished.
-      if (result.isPerformingActivity) {
-        setState(() => _count++);
-        if (_count >= alarm.targetReps) {
-          await _completeVerification();
-        } else {
-          setState(
-            () => _statusMessage = 'Counted! $_count/${alarm.targetReps} - keep going.',
-          );
-        }
-      } else {
-        setState(() {
-          _statusMessage = result.reasoning.isNotEmpty
-              ? result.reasoning
-              : "Doesn't look right yet - try again.";
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _statusMessage = 'Could not verify: $e');
-    } finally {
-      if (mounted) setState(() => _isVerifyingCustom = false);
-    }
   }
 
   Future<void> _completeVerification() async {
@@ -399,18 +291,17 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
                       icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
                       tooltip: 'Switch camera',
                     ),
-                  if (preset.supportsPoseDetection)
-                    IconButton(
-                      onPressed: () => setState(() => _showDebug = !_showDebug),
-                      icon: Icon(
-                        Icons.bug_report_outlined,
-                        color: _showDebug ? Colors.greenAccent : Colors.white,
-                      ),
-                      tooltip: 'Show tracking details',
+                  IconButton(
+                    onPressed: () => setState(() => _showDebug = !_showDebug),
+                    icon: Icon(
+                      Icons.bug_report_outlined,
+                      color: _showDebug ? Colors.greenAccent : Colors.white,
                     ),
+                    tooltip: 'Show tracking details',
+                  ),
                 ],
               ),
-              if (_showDebug && preset.supportsPoseDetection)
+              if (_showDebug)
                 Container(
                   margin: const EdgeInsets.only(top: 4),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -436,50 +327,11 @@ class _ActivityVerificationScreenState extends ConsumerState<ActivityVerificatio
           left: 0,
           right: 0,
           child: Center(
-            child: preset.supportsPoseDetection
-                ? RepProgressRing(
-                    current: _count,
-                    target: ref.watch(alarmByIdProvider(widget.alarmId))?.targetReps ?? 1,
-                    unitLabel: preset.unitLabel,
-                  )
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          '$_count / ${ref.watch(alarmByIdProvider(widget.alarmId))?.targetReps ?? 1} ${preset.unitLabel}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: _isVerifyingCustom ? null : _captureCustomActivity,
-                        icon: _isVerifyingCustom
-                            ? const SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.videocam_outlined),
-                        label: Text(_isVerifyingCustom ? 'Working...' : 'Record & Verify'),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
-                        ),
-                      ),
-                    ],
-                  ),
+            child: RepProgressRing(
+              current: _count,
+              target: ref.watch(alarmByIdProvider(widget.alarmId))?.targetReps ?? 1,
+              unitLabel: preset.unitLabel,
+            ),
           ),
         ),
       ],

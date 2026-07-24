@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -75,14 +73,9 @@ class _SavedActivityPickerContent extends ConsumerWidget {
                     itemBuilder: (context, index) {
                       final template = templates[index];
                       final preset = ActivityPreset.byType(template.activityType);
-                      final imageBase64 = template.referenceImageBase64;
                       return Card(
                         child: ListTile(
-                          leading: imageBase64 != null && imageBase64.isNotEmpty
-                              ? CircleAvatar(
-                                  backgroundImage: MemoryImage(base64Decode(imageBase64)),
-                                )
-                              : Icon(preset.icon, color: Colors.deepPurpleAccent),
+                          leading: Icon(preset.icon, color: Colors.deepPurpleAccent),
                           title: Text(template.name),
                           subtitle: Text('${template.defaultTarget} ${preset.unitLabel}'),
                           trailing: IconButton(
