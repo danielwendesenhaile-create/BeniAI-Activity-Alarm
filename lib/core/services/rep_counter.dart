@@ -117,14 +117,12 @@ class RepCounter {
           upThreshold: 160,
         );
       case ActivityType.pushUps:
-        if (!_hasFullBodyInFrame(pose)) {
-          _debugInfo = 'rejected: not enough of the body is visible';
-          return false;
-        }
-        // Push-ups need a roughly horizontal (plank) torso - rejects
-        // someone standing and just bending an elbow, or a stray limb.
-        if (!_hasTorso(pose, wantHorizontal: true)) {
-          _debugInfo = 'rejected: torso is not horizontal (need plank posture)';
+        // Push-ups need shoulder+elbow+wrist+hip all visible - facing the
+        // camera close-up (limited space) or seen from the side both work,
+        // since this doesn't demand any particular 2D torso orientation,
+        // just that a real arm-and-torso chain is in frame.
+        if (!_hasPushUpLandmarks(pose)) {
+          _debugInfo = 'rejected: shoulder/elbow/wrist/hip not all confidently visible';
           return false;
         }
         return _processAngleBased(
@@ -154,9 +152,14 @@ class RepCounter {
     return confident / pose.landmarks.length >= _minVisibleFraction;
   }
 
-  /// Checks the shoulder-to-hip line is oriented the way the activity
-  /// expects: mostly horizontal for a push-up plank, mostly vertical for a
-  /// standing squat. Both landmarks must also be confidently visible.
+  /// Checks the shoulder-to-hip line reads as upright in the 2D image -
+  /// used for squats, where the camera is normally facing a standing
+  /// person head-on so "upright in frame" reliably matches "actually
+  /// standing". (Push-ups don't use an image-orientation check: a phone
+  /// placed close and facing the user - the practical setup in a small
+  /// room - won't show a horizontal torso in frame even though the body
+  /// is physically horizontal, so that check is skipped for push-ups; see
+  /// [_hasPushUpLandmarks].)
   bool _hasTorso(Pose pose, {required bool wantHorizontal}) {
     final shoulder = _bestLandmark(
       pose,
@@ -171,6 +174,23 @@ class RepCounter {
     if (dx == 0 && dy == 0) return false;
 
     return wantHorizontal ? dx >= dy : dy > dx;
+  }
+
+  /// Push-ups need a real arm-and-torso chain in frame - shoulder, elbow,
+  /// wrist and hip all confidently visible - rather than a specific 2D
+  /// torso orientation, so this works whether the phone is off to the
+  /// side (whole body in profile) or close and facing the user (limited
+  /// space; hand/arm movement is what's actually tracked either way).
+  bool _hasPushUpLandmarks(Pose pose) {
+    final shoulder = _bestLandmark(
+      pose,
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+    );
+    final elbow = _bestLandmark(pose, PoseLandmarkType.leftElbow, PoseLandmarkType.rightElbow);
+    final wrist = _bestLandmark(pose, PoseLandmarkType.leftWrist, PoseLandmarkType.rightWrist);
+    final hip = _bestLandmark(pose, PoseLandmarkType.leftHip, PoseLandmarkType.rightHip);
+    return shoulder != null && elbow != null && wrist != null && hip != null;
   }
 
   bool _processAngleBased(
