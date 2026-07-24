@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/analytics_service.dart';
 import '../../../core/services/firebase_auth_service.dart';
+import '../../../models/user_model.dart';
 
 class SignUpScreen extends ConsumerStatefulWidget {
   const SignUpScreen({super.key});
@@ -16,6 +17,7 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  Gender? _gender;
   bool _isSubmitting = false;
   String? _errorMessage;
 
@@ -28,15 +30,28 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_gender == null) {
+      setState(() => _errorMessage = 'Please choose one so we can show matching activity demos.');
+      return;
+    }
+
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
     });
 
     try {
-      await ref
-          .read(firebaseAuthServiceProvider)
-          .signUp(email: _emailController.text, password: _passwordController.text);
+      final authService = ref.read(firebaseAuthServiceProvider);
+      await authService.signUp(
+        email: _emailController.text,
+        password: _passwordController.text,
+      );
+      final uid = authService.currentUser?.uid;
+      if (uid != null) {
+        await ref
+            .read(firestoreRepositoryProvider)
+            .ensureUserProfile(uid: uid, email: _emailController.text.trim(), gender: _gender);
+      }
       ref.read(analyticsServiceProvider).track(AnalyticsEvents.signUp);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
@@ -74,6 +89,31 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
                     decoration: const InputDecoration(labelText: 'Password'),
                     validator: (value) =>
                         (value == null || value.length < 6) ? 'At least 6 characters' : null,
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'So we can show matching activity demos',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ChoiceChip(
+                          label: const Text('Female'),
+                          selected: _gender == Gender.female,
+                          onSelected: (_) => setState(() => _gender = Gender.female),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ChoiceChip(
+                          label: const Text('Male'),
+                          selected: _gender == Gender.male,
+                          onSelected: (_) => setState(() => _gender = Gender.male),
+                        ),
+                      ),
+                    ],
                   ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 12),

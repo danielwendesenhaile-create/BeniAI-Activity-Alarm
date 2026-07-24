@@ -31,23 +31,35 @@ class FirestoreRepository {
 
   // ---- Users ----------------------------------------------------------
 
+  /// Creates the user's profile document if it doesn't exist yet. Safe to
+  /// call on every sign-in (idempotent). If [gender] is passed and the
+  /// profile already exists without one set, it's merge-patched in - this
+  /// covers the sign-up flow, where this may race with the app's generic
+  /// post-auth bootstrap call (which doesn't know the chosen gender).
   Future<void> ensureUserProfile({
     required String uid,
     required String email,
     String? displayName,
+    Gender? gender,
   }) async {
     final doc = _users.doc(uid);
     final snapshot = await doc.get();
-    if (snapshot.exists) return;
+    if (!snapshot.exists) {
+      final user = AppUserModel(
+        uid: uid,
+        email: email,
+        displayName: displayName,
+        gender: gender,
+        isPremium: false,
+        createdAt: DateTime.now(),
+      );
+      await doc.set(user.toMap());
+      return;
+    }
 
-    final user = AppUserModel(
-      uid: uid,
-      email: email,
-      displayName: displayName,
-      isPremium: false,
-      createdAt: DateTime.now(),
-    );
-    await doc.set(user.toMap());
+    if (gender != null && snapshot.data()?['gender'] == null) {
+      await doc.set({'gender': gender.id}, SetOptions(merge: true));
+    }
   }
 
   Stream<AppUserModel?> watchUser(String uid) {
