@@ -87,7 +87,7 @@ class _AlarmRingScreenState extends ConsumerState<AlarmRingScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 20),
                     ),
                     onPressed: () {
-                      context.pushReplacement(AppRoutes.verifyAlarm(widget.alarmId));
+                      context.pushReplacement(AppRoutes.guideAlarm(widget.alarmId));
                     },
                     icon: const Icon(Icons.camera_alt),
                     label: const Text(

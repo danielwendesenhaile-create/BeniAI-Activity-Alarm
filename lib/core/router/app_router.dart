@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/alarms/screens/activity_history_screen.dart';
 import '../../features/alarms/screens/alarm_edit_screen.dart';
+import '../../features/alarm_ring/screens/activity_guide_screen.dart';
 import '../../features/alarm_ring/screens/alarm_ring_screen.dart';
 import '../../features/alarm_ring/screens/activity_verification_screen.dart';
 import '../../features/auth/screens/auth_gate.dart';
@@ -20,6 +21,7 @@ class AppRoutes {
   static const newAlarm = '/alarm/new';
   static String editAlarm(String id) => '/alarm/$id/edit';
   static String ringAlarm(String id) => '/alarm/$id/ring';
+  static String guideAlarm(String id) => '/alarm/$id/guide';
   static String verifyAlarm(String id) => '/alarm/$id/verify';
   static const settings = '/settings';
   static const history = '/history';
@@ -42,6 +44,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/alarm/:id/ring',
         builder: (context, state) => AlarmRingScreen(alarmId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/alarm/:id/guide',
+        builder: (context, state) => ActivityGuideScreen(alarmId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/alarm/:id/verify',
